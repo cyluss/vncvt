@@ -218,9 +218,9 @@ class RFBClient:
             255,  # red-max
             255,  # green-max
             255,  # blue-max
-            16,   # red-shift
-            8,    # green-shift
-            0,    # blue-shift
+            0,    # red-shift   (byte0 = R in RGBX memory layout)
+            8,    # green-shift (byte1 = G)
+            16,   # blue-shift  (byte2 = B)
         )
         server_init = struct.pack(">HH", renderer.width, renderer.height)
         server_init += pixel_format
