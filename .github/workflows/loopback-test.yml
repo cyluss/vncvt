@@ -1,0 +1,39 @@
+name: Loopback Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  loopback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Start VNC server
+        run: |
+          uv run python -m vncvt --port 5996 &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Run loopback test
+        run: uv run python test_loopback.py 5996 screenshot.png
+
+      - name: Stop server
+        if: always()
+        run: kill "$SERVER_PID" 2>/dev/null || true
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: screenshot.png
