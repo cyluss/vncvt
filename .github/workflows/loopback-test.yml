@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  loopback:
+  linux-loopback:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,22 +18,70 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Start VNC server
+      - name: Start VNC server (None auth)
         run: |
           uv run python -m vncvt --port 5996 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
           sleep 2
 
-      - name: Run loopback test
+      - name: Run loopback test (RGBX default)
         run: uv run python test_loopback.py 5996 screenshot.png
+
+      - name: Run Apple-like BGRX pixel format test
+        run: uv run python test_apple_pixelfmt.py 5996 screenshot_apple.png
 
       - name: Stop server
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
 
-      - name: Upload screenshot
+      - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshot
-          path: screenshot.png
+          name: linux-screenshots
+          path: |
+            screenshot.png
+            screenshot_apple.png
+
+  macos-screen-sharing:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Start vncvt with VNC auth
+        run: |
+          uv run python -m vncvt --port 5900 --password testpass &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Open Screen Sharing and drive session
+        run: |
+          # Apple's Screen Sharing.app is the default handler for vnc://
+          open "vnc://testpass@127.0.0.1:5900"
+          sleep 6
+          # Send a keystroke via System Events (may need TCC grants on
+          # first-time runner — we tolerate failure via continue-on-error)
+          osascript -e 'tell application "System Events" to keystroke "echo mac-ci-works"' || true
+          sleep 1
+          osascript -e 'tell application "System Events" to key code 36' || true
+          sleep 2
+          screencapture -x -o screenshot-mac.png || true
+
+      - name: Stop server
+        if: always()
+        run: kill "$SERVER_PID" 2>/dev/null || true
+
+      - name: Upload macOS screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-screenshot
+          path: screenshot-mac.png
+          if-no-files-found: ignore

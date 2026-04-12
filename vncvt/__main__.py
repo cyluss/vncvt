@@ -36,6 +36,12 @@ def main() -> None:
     parser.add_argument(
         "--shell", default="/bin/bash", help="Shell to run (default: /bin/bash)"
     )
+    parser.add_argument(
+        "--password", default=None,
+        help="Enable VNC Authentication (type 2) with this password. "
+             "Required for macOS Screen Sharing.app. If omitted, only "
+             "None auth (type 1) is offered.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -55,6 +61,7 @@ def main() -> None:
         port=args.port,
         terminal=terminal,
         renderer=renderer,
+        password=args.password,
     )
 
     loop = asyncio.new_event_loop()

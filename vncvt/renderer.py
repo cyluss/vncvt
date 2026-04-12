@@ -177,7 +177,9 @@ class TerminalRenderer:
         self.rows = rows
         self.width = cols * self.cell_width
         self.height = rows * self.cell_height
-        self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
+        self.image = Image.new(
+            "RGBA", (self.width, self.height), DEFAULT_BG + (255,)
+        )
         self._prev_cursor = (-1, -1)
 
     def _resolve_color(
@@ -223,8 +225,8 @@ class TerminalRenderer:
 
     def render_dirty(
         self, screen: pyte.Screen, dirty_rows: set[int]
-    ) -> list[tuple[int, int, int, int, bytes]]:
-        """Re-render dirty rows. Returns list of (x, y, w, h, rgbx_bytes) rectangles."""
+    ) -> list[tuple[int, int, int, int, "Image.Image"]]:
+        """Re-render dirty rows. Returns list of (x, y, w, h, PIL.Image) rectangles."""
         if not dirty_rows:
             return []
 
@@ -318,16 +320,16 @@ class TerminalRenderer:
                 if cells == 2:
                     skip_next = 1
 
-            # Extract row pixels
+            # Return a crop view of the row — cheap, no copy until tobytes.
             row_img = self.image.crop((0, y, self.width, y + self.cell_height))
-            rects.append((0, y, self.width, self.cell_height, row_img.tobytes()))
+            rects.append((0, y, self.width, self.cell_height, row_img))
 
         return rects
 
     def render_cursor(
         self, screen: pyte.Screen
-    ) -> tuple[int, int, int, int, bytes] | None:
-        """Render cursor block. Returns (x, y, w, h, rgbx_bytes) or None."""
+    ) -> tuple[int, int, int, int, "Image.Image"] | None:
+        """Render cursor block. Returns (x, y, w, h, PIL.Image) or None."""
         cx, cy = screen.cursor.x, screen.cursor.y
         if cx >= self.cols or cy >= self.rows:
             return None
@@ -359,15 +361,14 @@ class TerminalRenderer:
             )
 
         self._prev_cursor = (cx, cy)
-        return (x, y, cell_px, self.cell_height, cursor_img.tobytes())
+        return (x, y, cell_px, self.cell_height, cursor_img)
 
-    def full_render(self, screen: pyte.Screen) -> bytes:
-        """Render the entire screen. Returns RGBX pixel bytes."""
+    def full_render(self, screen: pyte.Screen) -> "Image.Image":
+        """Render the entire screen. Returns the full PIL Image."""
         all_rows = set(range(self.rows))
         self.render_dirty(screen, all_rows)
         cursor = self.render_cursor(screen)
         if cursor:
-            x, y, w, h, data = cursor
-            cursor_img = Image.frombytes("RGBX", (w, h), data)
+            x, y, _, _, cursor_img = cursor
             self.image.paste(cursor_img, (x, y))
-        return self.image.tobytes()
+        return self.image

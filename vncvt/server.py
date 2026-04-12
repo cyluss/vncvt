@@ -1,7 +1,9 @@
 """RFB (VNC) protocol server with asyncio."""
 
 import asyncio
+import hmac
 import logging
+import secrets
 import struct
 import zlib
 
@@ -9,6 +11,80 @@ from .terminal import Terminal
 from .renderer import TerminalRenderer
 
 log = logging.getLogger(__name__)
+
+
+# Pillow raw modes supported for 32bpp true-colour output.
+_SUPPORTED_RAW_MODES = frozenset({
+    "RGBX", "BGRX", "XRGB", "XBGR",
+    "RGBA", "BGRA", "ARGB", "ABGR",
+})
+
+
+def _choose_raw_mode(pf: dict) -> str:
+    """Pick a Pillow raw mode string matching the client's pixel format.
+
+    Given a PixelFormat dict with keys bpp, true_colour, *_max, *_shift,
+    big_endian, derive the matching Pillow raw output mode so that
+    `image.tobytes('raw', mode)` produces the exact byte layout the
+    client expects.
+    """
+    if (
+        pf["bpp"] != 32
+        or not pf["true_colour"]
+        or pf["red_max"] != 255
+        or pf["green_max"] != 255
+        or pf["blue_max"] != 255
+    ):
+        log.warning("Unsupported pixel format %s; falling back to RGBA", pf)
+        return "RGBA"
+
+    byte_pos = {
+        "R": pf["red_shift"] // 8,
+        "G": pf["green_shift"] // 8,
+        "B": pf["blue_shift"] // 8,
+    }
+    used = set(byte_pos.values())
+    if len(used) != 3 or not used.issubset({0, 1, 2, 3}):
+        log.warning("Unusual shifts in %s; falling back to RGBA", pf)
+        return "RGBA"
+
+    x_pos = ({0, 1, 2, 3} - used).pop()
+    layout = [None, None, None, None]
+    for name, pos in byte_pos.items():
+        layout[pos] = name
+    layout[x_pos] = "X"
+    mode = "".join(layout)
+
+    # Big-endian wire order is MSB..LSB; reverse the in-memory layout.
+    if pf["big_endian"]:
+        mode = mode[::-1]
+
+    if mode not in _SUPPORTED_RAW_MODES:
+        log.warning("Derived mode %s not supported by Pillow; using RGBA", mode)
+        return "RGBA"
+    return mode
+
+
+def _vnc_encrypt(challenge: bytes, password: str) -> bytes:
+    """Encrypt a VNC auth challenge with the given password (single-DES ECB).
+
+    Per RFC 6143 §7.2.2 and historical VNC convention: the password is
+    truncated/padded to 8 bytes, and each byte has its bits reversed
+    before being used as the DES key.
+    """
+    from cryptography.hazmat.primitives.ciphers import Cipher, modes
+    try:
+        from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+    except ImportError:  # pragma: no cover — older cryptography versions
+        from cryptography.hazmat.primitives.ciphers.algorithms import TripleDES
+
+    key = password.encode("latin-1", errors="replace")[:8].ljust(8, b"\x00")
+    # Bit-reverse each byte (VNC historical quirk).
+    key = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
+    # `cryptography` exposes single-DES via TripleDES with K1=K2=K3.
+    cipher = Cipher(TripleDES(key + key + key), modes.ECB())
+    enc = cipher.encryptor()
+    return enc.update(challenge) + enc.finalize()
 
 
 def keysym_to_bytes(keysym: int, ctrl_pressed: bool) -> bytes | None:
@@ -79,11 +155,13 @@ class RFBServer:
         port: int,
         terminal: Terminal,
         renderer: TerminalRenderer,
+        password: str | None = None,
     ):
         self.host = host
         self.port = port
         self.terminal = terminal
         self.renderer = renderer
+        self.password = password
         self.clients: list[RFBClient] = []
         self._running = False
 
@@ -179,9 +257,28 @@ class RFBClient:
         self._ctrl_pressed = False
         self._zlib_compressor: zlib.compressobj | None = None
 
+        # Default pixel format matches our ServerInit advertisement (RGBX).
+        self.pixel_format = {
+            "bpp": 32, "depth": 24, "big_endian": 0, "true_colour": 1,
+            "red_max": 255, "green_max": 255, "blue_max": 255,
+            "red_shift": 0, "green_shift": 8, "blue_shift": 16,
+        }
+        self._raw_mode = "RGBX"
+
     async def run(self) -> None:
         await self._handshake()
         await self._message_loop()
+
+    async def _vnc_auth(self) -> bool:
+        """Perform VNC Authentication (RFB security type 2)."""
+        challenge = secrets.token_bytes(16)
+        self.writer.write(challenge)
+        await self.writer.drain()
+        response = await self.reader.readexactly(16)
+        if self.server.password is None:
+            return False
+        expected = _vnc_encrypt(challenge, self.server.password)
+        return hmac.compare_digest(response, expected)
 
     async def _handshake(self) -> None:
         """Perform RFB 3.8 protocol handshake."""
@@ -192,15 +289,29 @@ class RFBClient:
         # 2. Read client version
         await self.reader.readexactly(12)
 
-        # 3. Security types: offer None (type 1)
-        self.writer.write(bytes([1, 1]))  # 1 security type, type=None
+        # 3. Security types: offer VNC auth (2) + None (1) if password is
+        #    configured; otherwise offer only None.
+        if self.server.password:
+            self.writer.write(bytes([2, 2, 1]))  # 2 types: VNC, None
+        else:
+            self.writer.write(bytes([1, 1]))     # 1 type:  None
         await self.writer.drain()
 
         # 4. Read selected security type
-        await self.reader.readexactly(1)
+        selected = (await self.reader.readexactly(1))[0]
 
-        # 5. SecurityResult: OK
-        self.writer.write(struct.pack(">I", 0))
+        # 5. Run auth for the selected type, then send SecurityResult.
+        if selected == 2:
+            ok = await self._vnc_auth()
+            if not ok:
+                self.writer.write(struct.pack(">I", 1))
+                reason = b"VNC authentication failed"
+                self.writer.write(struct.pack(">I", len(reason)) + reason)
+                await self.writer.drain()
+                raise ConnectionError("VNC auth failed")
+            self.writer.write(struct.pack(">I", 0))
+        else:
+            self.writer.write(struct.pack(">I", 0))
         await self.writer.drain()
 
         # 6. ClientInit (shared flag)
@@ -234,7 +345,22 @@ class RFBClient:
             msg_type = (await self.reader.readexactly(1))[0]
 
             if msg_type == 0:    # SetPixelFormat
-                await self.reader.readexactly(19)  # 3 pad + 16 format bytes
+                raw = await self.reader.readexactly(19)  # 3 pad + 16 pf
+                pf_bytes = raw[3:]
+                (bpp, depth, be, tc,
+                 r_max, g_max, b_max,
+                 r_shift, g_shift, b_shift) = struct.unpack(
+                    ">BBBBHHHBBB", pf_bytes[:13]
+                )
+                self.pixel_format = {
+                    "bpp": bpp, "depth": depth,
+                    "big_endian": be, "true_colour": tc,
+                    "red_max": r_max, "green_max": g_max, "blue_max": b_max,
+                    "red_shift": r_shift, "green_shift": g_shift,
+                    "blue_shift": b_shift,
+                }
+                self._raw_mode = _choose_raw_mode(self.pixel_format)
+                log.info("Client pixel format -> raw mode %s", self._raw_mode)
 
             elif msg_type == 2:  # SetEncodings
                 data = await self.reader.readexactly(3)  # 1 pad + 2 count
@@ -322,25 +448,42 @@ class RFBClient:
         self.writer.write(header + rect_header + num_screens + screen)
         await self.writer.drain()
 
-    async def _send_full_update(self, fb_data: bytes) -> None:
+    def _image_to_bytes(self, img) -> bytes:
+        """Serialize a PIL Image to the client's negotiated pixel format.
+
+        Our framebuffer is RGBX. Pillow's raw packer supports direct
+        conversion from RGBX to the X-variant modes (RGBX/BGRX/XRGB/XBGR)
+        but not to the A-variant modes (RGBA/BGRA/...). For alpha modes
+        we go through an explicit RGBA conversion first.
+        """
+        mode = self._raw_mode
+        if mode in ("RGBX", "BGRX", "XRGB", "XBGR"):
+            return img.tobytes("raw", mode)
+        return img.convert("RGBA").tobytes("raw", mode)
+
+    async def _send_full_update(self, fb_image) -> None:
         """Send a non-incremental full framebuffer update."""
         renderer = self.server.renderer
+        pixel_data = self._image_to_bytes(fb_image)
         header = struct.pack(">BxH", 0, 1)  # type=0, 1 rectangle
         rect_header = struct.pack(
             ">HHHHi", 0, 0, renderer.width, renderer.height, 0  # Raw encoding
         )
-        self.writer.write(header + rect_header + fb_data)
+        self.writer.write(header + rect_header + pixel_data)
         await self.writer.drain()
 
-    async def send_framebuffer_update(
-        self, rects: list[tuple[int, int, int, int, bytes]]
-    ) -> None:
-        """Send incremental framebuffer update with given rectangles."""
+    async def send_framebuffer_update(self, rects) -> None:
+        """Send incremental framebuffer update with given rectangles.
+
+        Each rect is (x, y, w, h, PIL.Image). Pixel bytes are serialized
+        per-client using the negotiated pixel format.
+        """
         use_zlib = 6 in self.encodings  # zlib encoding type
         header = struct.pack(">BxH", 0, len(rects))
         self.writer.write(header)
 
-        for x, y, w, h, pixel_data in rects:
+        for x, y, w, h, img in rects:
+            pixel_data = self._image_to_bytes(img)
             if use_zlib:
                 if self._zlib_compressor is None:
                     self._zlib_compressor = zlib.compressobj()
