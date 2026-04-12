@@ -1,0 +1,16 @@
+[project]
+name = "vncvt"
+version = "0.1.0"
+description = "VNC terminal server with VT220 amber aesthetic"
+requires-python = ">=3.11"
+dependencies = [
+    "pyte>=0.8.2",
+    "pillow>=10.0.0",
+]
+
+[project.scripts]
+vncvt = "vncvt.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
