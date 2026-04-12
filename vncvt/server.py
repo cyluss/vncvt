@@ -461,8 +461,10 @@ class RFBClient:
                 left = bool(button_mask & 0x01)
                 term = self.server.terminal
                 rend = self.server.renderer
-                col = max(0, min(term.cols - 1, px // rend.cell_width))
-                row = max(0, min(term.rows - 1, py // rend.cell_height))
+                # Subtract overscan padding so clicks in the border
+                # clamp to the nearest edge cell.
+                col = max(0, min(term.cols - 1, (px - rend.padding) // rend.cell_width))
+                row = max(0, min(term.rows - 1, (py - rend.padding) // rend.cell_height))
 
                 if left and not self._left_down:
                     # Button-down edge — start a new selection.
@@ -496,11 +498,12 @@ class RFBClient:
 
                 if -223 in self.encodings:
                     renderer = self.server.renderer
-                    new_cols = max(1, req_w // renderer.cell_width)
-                    new_rows = max(1, req_h // renderer.cell_height)
-                    # Snap to cell grid
-                    actual_w = new_cols * renderer.cell_width
-                    actual_h = new_rows * renderer.cell_height
+                    pad = renderer.padding
+                    new_cols = max(1, (req_w - 2 * pad) // renderer.cell_width)
+                    new_rows = max(1, (req_h - 2 * pad) // renderer.cell_height)
+                    # Snap to cell grid (plus padding on each side)
+                    actual_w = new_cols * renderer.cell_width + 2 * pad
+                    actual_h = new_rows * renderer.cell_height + 2 * pad
                     self.server.terminal.resize(new_cols, new_rows)
                     renderer.resize(new_cols, new_rows)
                     log.info(

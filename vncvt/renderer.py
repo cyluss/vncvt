@@ -141,6 +141,11 @@ def _cell_in_selection(
 class TerminalRenderer:
     """Renders a pyte Screen to an RGBX pixel buffer with amber-tinted colors."""
 
+    # Overscan compensation: extra pixels of background around the
+    # cell grid, like a CRT's overscan region. Mostly cosmetic — it
+    # keeps the first column of text from hugging the screen edge.
+    PADDING = 5
+
     def __init__(
         self,
         cols: int = 80,
@@ -150,6 +155,7 @@ class TerminalRenderer:
     ):
         self.cols = cols
         self.rows = rows
+        self.padding = self.PADDING
 
         # Load fonts
         if font_path is None:
@@ -184,10 +190,10 @@ class TerminalRenderer:
                     bold_adv, self.cell_width,
                 )
 
-        self.width = cols * self.cell_width
-        self.height = rows * self.cell_height
+        self.width = cols * self.cell_width + 2 * self.padding
+        self.height = rows * self.cell_height + 2 * self.padding
 
-        # Create framebuffer image
+        # Create framebuffer image (padded by DEFAULT_BG on all sides).
         self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
         self._prev_cursor = (-1, -1)
 
@@ -195,11 +201,9 @@ class TerminalRenderer:
         """Resize the framebuffer to new terminal dimensions."""
         self.cols = cols
         self.rows = rows
-        self.width = cols * self.cell_width
-        self.height = rows * self.cell_height
-        self.image = Image.new(
-            "RGBA", (self.width, self.height), DEFAULT_BG + (255,)
-        )
+        self.width = cols * self.cell_width + 2 * self.padding
+        self.height = rows * self.cell_height + 2 * self.padding
+        self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
         self._prev_cursor = (-1, -1)
 
     def _resolve_color(
@@ -261,14 +265,17 @@ class TerminalRenderer:
         draw = ImageDraw.Draw(self.image)
         rects = []
 
+        pad = self.padding
+        inner_w = self.cols * self.cell_width
+
         for row in sorted(dirty_rows):
             if row >= self.rows:
                 continue
-            y = row * self.cell_height
+            y = row * self.cell_height + pad
 
-            # Clear the entire row background
+            # Clear the cell-grid area for this row (leave side padding alone).
             draw.rectangle(
-                [0, y, self.width, y + self.cell_height - 1],
+                [pad, y, pad + inner_w - 1, y + self.cell_height - 1],
                 fill=DEFAULT_BG,
             )
 
@@ -280,7 +287,7 @@ class TerminalRenderer:
                     continue
 
                 char = line[col]
-                x = col * self.cell_width
+                x = col * self.cell_width + pad
                 ch = char.data
 
                 fg = self._resolve_color(char.fg, char.bold, is_bg=False)
@@ -306,7 +313,7 @@ class TerminalRenderer:
                 # Combining mark: overlay on previous cell without touching bg.
                 if w == 0 and col > 0 and ch:
                     font = self.font_bold if char.bold else self.font
-                    prev_x = (col - 1) * self.cell_width
+                    prev_x = (col - 1) * self.cell_width + pad
                     draw.text(
                         (prev_x + self._x_offset, y + self._y_offset),
                         ch, font=font, fill=fg,
@@ -353,9 +360,13 @@ class TerminalRenderer:
                 if cells == 2:
                     skip_next = 1
 
-            # Return a crop view of the row — cheap, no copy until tobytes.
-            row_img = self.image.crop((0, y, self.width, y + self.cell_height))
-            rects.append((0, y, self.width, self.cell_height, row_img))
+            # Return a crop view of the row (inner area only). Skipping
+            # the side padding saves a few bytes per row and keeps the
+            # update bounded to cells that actually changed.
+            row_img = self.image.crop(
+                (pad, y, pad + inner_w, y + self.cell_height)
+            )
+            rects.append((pad, y, inner_w, self.cell_height, row_img))
 
         return rects
 
@@ -373,8 +384,8 @@ class TerminalRenderer:
         cells = 2 if w == 2 else 1
         cell_px = self.cell_width * cells
 
-        x = cx * self.cell_width
-        y = cy * self.cell_height
+        x = cx * self.cell_width + self.padding
+        y = cy * self.cell_height + self.padding
 
         # Draw cursor as a filled block with inverted colors.
         cursor_img = self.image.crop(

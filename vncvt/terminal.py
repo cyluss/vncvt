@@ -26,6 +26,15 @@ class Terminal:
         self.selection_anchor: tuple[int, int] | None = None  # (col, row)
         self.selection_head: tuple[int, int] | None = None
 
+        # Track cursor position so we can dirty the previous row when
+        # the cursor moves — otherwise a ghost cursor lingers on the
+        # old row (e.g. after pressing Enter, the prompt's tail row
+        # keeps showing the block cursor).
+        self._last_cursor: tuple[int, int] = (
+            self.screen.cursor.x,
+            self.screen.cursor.y,
+        )
+
         self.master_fd, slave_fd = os.openpty()
 
         # Set terminal size on slave before fork
@@ -90,8 +99,20 @@ class Terminal:
         os.kill(self.pid, signal.SIGWINCH)
 
     def get_dirty_rows(self) -> set[int]:
-        """Return set of dirty row indices and clear the dirty set."""
+        """Return set of dirty row indices and clear the dirty set.
+
+        Also adds the previous cursor row when the cursor has moved,
+        so the old cursor block gets erased on the next render pass.
+        """
         dirty = self.screen.dirty.copy()
+        cx, cy = self.screen.cursor.x, self.screen.cursor.y
+        if (cx, cy) != self._last_cursor:
+            prev_y = self._last_cursor[1]
+            if 0 <= prev_y < self.rows:
+                dirty.add(prev_y)
+            if 0 <= cy < self.rows:
+                dirty.add(cy)
+            self._last_cursor = (cx, cy)
         self.screen.dirty.clear()
         return dirty
 

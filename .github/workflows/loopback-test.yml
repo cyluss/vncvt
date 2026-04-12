@@ -33,6 +33,9 @@ jobs:
       - name: Run drag-to-copy selection test
         run: uv run python test_selection.py 5996
 
+      - name: Run paste + padding + line-refresh test
+        run: uv run python test_paste.py 5996 screenshot_paste.png
+
       - name: Stop server
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
@@ -45,6 +48,7 @@ jobs:
           path: |
             screenshot.png
             screenshot_apple.png
+            screenshot_paste.png
 
   macos-screen-sharing:
     runs-on: macos-latest
