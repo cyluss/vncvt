@@ -280,8 +280,47 @@ class RFBClient:
                 text = await self.reader.readexactly(length)
                 self.server.terminal.write(text)
 
+            elif msg_type == 251:  # SetDesktopSize
+                data = await self.reader.readexactly(7)
+                # 1 pad + 2 width + 2 height + 1 num-screens + 1 pad
+                req_w, req_h, num_screens = struct.unpack(">xHHBx", data)
+                # Read screen entries (16 bytes each)
+                for _ in range(num_screens):
+                    await self.reader.readexactly(16)
+
+                if -223 in self.encodings:
+                    renderer = self.server.renderer
+                    new_cols = max(1, req_w // renderer.cell_width)
+                    new_rows = max(1, req_h // renderer.cell_height)
+                    # Snap to cell grid
+                    actual_w = new_cols * renderer.cell_width
+                    actual_h = new_rows * renderer.cell_height
+                    self.server.terminal.resize(new_cols, new_rows)
+                    renderer.resize(new_cols, new_rows)
+                    log.info(
+                        "Resize: %dx%d -> %dx%d cols/rows, %dx%d px",
+                        req_w, req_h, new_cols, new_rows, actual_w, actual_h,
+                    )
+                    await self._send_desktop_size(actual_w, actual_h, status=0)
+                    # Send full framebuffer at new size
+                    fb = renderer.full_render(self.server.terminal.screen)
+                    await self._send_full_update(fb)
+
             else:
                 log.warning("Unknown message type: %d", msg_type)
+
+    async def _send_desktop_size(self, width: int, height: int, status: int = 0) -> None:
+        """Send ExtendedDesktopSize pseudo-encoding to confirm resize."""
+        # FramebufferUpdate with 1 rect using encoding -308 (ExtendedDesktopSize)
+        # status: 0=ok, x/y encodes the status and reason
+        header = struct.pack(">BxH", 0, 1)
+        # x=status, y=0 (server-requested change)
+        rect_header = struct.pack(">HHHHi", status, 0, width, height, -308)
+        # 1 screen: id=0, x=0, y=0, width, height, flags=0
+        screen = struct.pack(">IHHHHI", 0, 0, 0, width, height, 0)
+        num_screens = struct.pack(">Bxxx", 1)
+        self.writer.write(header + rect_header + num_screens + screen)
+        await self.writer.drain()
 
     async def _send_full_update(self, fb_data: bytes) -> None:
         """Send a non-incremental full framebuffer update."""

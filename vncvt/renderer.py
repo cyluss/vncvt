@@ -156,6 +156,15 @@ class TerminalRenderer:
         self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
         self._prev_cursor = (-1, -1)
 
+    def resize(self, cols: int, rows: int) -> None:
+        """Resize the framebuffer to new terminal dimensions."""
+        self.cols = cols
+        self.rows = rows
+        self.width = cols * self.cell_width
+        self.height = rows * self.cell_height
+        self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
+        self._prev_cursor = (-1, -1)
+
     def _resolve_color(
         self, color: str, bold: bool = False, is_bg: bool = False
     ) -> tuple[int, int, int]:
