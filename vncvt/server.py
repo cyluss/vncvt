@@ -87,6 +87,48 @@ def _vnc_encrypt(challenge: bytes, password: str) -> bytes:
     return enc.update(challenge) + enc.finalize()
 
 
+def _fmt_hex(data: bytes, max_bytes: int = 64) -> str:
+    """Format bytes as space-separated hex with a size cap."""
+    if len(data) <= max_bytes:
+        return f"{len(data):5d}B  {data.hex(' ')}"
+    head = data[:max_bytes].hex(" ")
+    return f"{len(data):5d}B  {head} ... (+{len(data) - max_bytes})"
+
+
+class _LoggingReader:
+    """Wraps asyncio.StreamReader and logs each read as hex."""
+
+    def __init__(self, reader: asyncio.StreamReader, prefix: str):
+        self._reader = reader
+        self._prefix = prefix
+
+    async def readexactly(self, n: int) -> bytes:
+        data = await self._reader.readexactly(n)
+        log.info("%s %s", self._prefix, _fmt_hex(data))
+        return data
+
+
+class _LoggingWriter:
+    """Wraps asyncio.StreamWriter and logs each write as hex."""
+
+    def __init__(self, writer: asyncio.StreamWriter, prefix: str):
+        self._writer = writer
+        self._prefix = prefix
+
+    def write(self, data: bytes) -> None:
+        log.info("%s %s", self._prefix, _fmt_hex(data))
+        self._writer.write(data)
+
+    async def drain(self) -> None:
+        await self._writer.drain()
+
+    def close(self) -> None:
+        self._writer.close()
+
+    def get_extra_info(self, *args, **kwargs):
+        return self._writer.get_extra_info(*args, **kwargs)
+
+
 def keysym_to_bytes(keysym: int, ctrl_pressed: bool) -> bytes | None:
     """Convert an X11 keysym to the byte sequence to write to a terminal PTY."""
     # Modifier keys produce no output
@@ -156,12 +198,14 @@ class RFBServer:
         terminal: Terminal,
         renderer: TerminalRenderer,
         password: str | None = None,
+        log_traffic: bool = False,
     ):
         self.host = host
         self.port = port
         self.terminal = terminal
         self.renderer = renderer
         self.password = password
+        self.log_traffic = log_traffic
         self.clients: list[RFBClient] = []
         self._running = False
 
@@ -201,9 +245,12 @@ class RFBServer:
             if not dirty and not self.clients:
                 continue
 
+            selection = self.terminal.selection_normalized()
             rects = []
             if dirty:
-                rects = self.renderer.render_dirty(self.terminal.screen, dirty)
+                rects = self.renderer.render_dirty(
+                    self.terminal.screen, dirty, selection=selection
+                )
 
             # Always update cursor position
             cursor_rect = self.renderer.render_cursor(self.terminal.screen)
@@ -231,6 +278,8 @@ class RFBServer:
             await client.run()
         except (ConnectionError, asyncio.IncompleteReadError, OSError) as e:
             log.info("Client %s disconnected: %s", peer, e)
+        except Exception:
+            log.exception("Client %s handler crashed", peer)
         finally:
             if client in self.clients:
                 self.clients.remove(client)
@@ -249,8 +298,12 @@ class RFBClient:
         writer: asyncio.StreamWriter,
         server: RFBServer,
     ):
-        self.reader = reader
-        self.writer = writer
+        if server.log_traffic:
+            self.reader = _LoggingReader(reader, "<<")
+            self.writer = _LoggingWriter(writer, ">>")
+        else:
+            self.reader = reader
+            self.writer = writer
         self.server = server
         self.update_requested = False
         self.encodings: list[int] = [0]  # Raw by default
@@ -264,6 +317,10 @@ class RFBClient:
             "red_shift": 0, "green_shift": 8, "blue_shift": 16,
         }
         self._raw_mode = "RGBX"
+
+        # Pointer state for drag-to-select.
+        self._left_down = False
+        self._last_pointer_cell: tuple[int, int] | None = None
 
     async def run(self) -> None:
         await self._handshake()
@@ -377,7 +434,8 @@ class RFBClient:
                 if not incremental:
                     # Send full framebuffer
                     fb = self.server.renderer.full_render(
-                        self.server.terminal.screen
+                        self.server.terminal.screen,
+                        selection=self.server.terminal.selection_normalized(),
                     )
                     await self._send_full_update(fb)
                 else:
@@ -398,7 +456,29 @@ class RFBClient:
                         self.server.terminal.write(byte_seq)
 
             elif msg_type == 5:  # PointerEvent
-                await self.reader.readexactly(5)
+                data = await self.reader.readexactly(5)
+                button_mask, px, py = struct.unpack(">BHH", data)
+                left = bool(button_mask & 0x01)
+                term = self.server.terminal
+                rend = self.server.renderer
+                col = max(0, min(term.cols - 1, px // rend.cell_width))
+                row = max(0, min(term.rows - 1, py // rend.cell_height))
+
+                if left and not self._left_down:
+                    # Button-down edge — start a new selection.
+                    term.begin_selection(col, row)
+                elif left and self._left_down:
+                    # Drag — update the moving end.
+                    if self._last_pointer_cell != (col, row):
+                        term.update_selection(col, row)
+                elif not left and self._left_down:
+                    # Button-up edge — finalize and ship cut text.
+                    text = term.end_selection()
+                    if text:
+                        await self._send_cut_text(text)
+
+                self._left_down = left
+                self._last_pointer_cell = (col, row)
 
             elif msg_type == 6:  # ClientCutText
                 data = await self.reader.readexactly(7)
@@ -429,7 +509,10 @@ class RFBClient:
                     )
                     await self._send_desktop_size(actual_w, actual_h, status=0)
                     # Send full framebuffer at new size
-                    fb = renderer.full_render(self.server.terminal.screen)
+                    fb = renderer.full_render(
+                        self.server.terminal.screen,
+                        selection=self.server.terminal.selection_normalized(),
+                    )
                     await self._send_full_update(fb)
 
             else:
@@ -446,6 +529,18 @@ class RFBClient:
         screen = struct.pack(">IHHHHI", 0, 0, 0, width, height, 0)
         num_screens = struct.pack(">Bxxx", 1)
         self.writer.write(header + rect_header + num_screens + screen)
+        await self.writer.drain()
+
+    async def _send_cut_text(self, text: str) -> None:
+        """Send a ServerCutText (RFB msg type 3) with the given text.
+
+        RFC 6143 §7.6.4: message type (1) + 3 pad + u32 length + Latin-1
+        payload. Full Unicode requires the Extended Clipboard pseudo-
+        encoding (-1063) which is not implemented here; non-Latin-1
+        characters are replaced with '?'.
+        """
+        payload = text.encode("latin-1", errors="replace")
+        self.writer.write(struct.pack(">Bxxx", 3) + struct.pack(">I", len(payload)) + payload)
         await self.writer.drain()
 
     def _image_to_bytes(self, img) -> bytes:

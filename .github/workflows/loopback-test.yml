@@ -30,6 +30,9 @@ jobs:
       - name: Run Apple-like BGRX pixel format test
         run: uv run python test_apple_pixelfmt.py 5996 screenshot_apple.png
 
+      - name: Run drag-to-copy selection test
+        run: uv run python test_selection.py 5996
+
       - name: Stop server
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true

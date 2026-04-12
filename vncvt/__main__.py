@@ -42,6 +42,10 @@ def main() -> None:
              "Required for macOS Screen Sharing.app. If omitted, only "
              "None auth (type 1) is offered.",
     )
+    parser.add_argument(
+        "--log-traffic", action="store_true",
+        help="Log every byte of RFB traffic as hex (noisy — for debugging).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -62,6 +66,7 @@ def main() -> None:
         terminal=terminal,
         renderer=renderer,
         password=args.password,
+        log_traffic=args.log_traffic,
     )
 
     loop = asyncio.new_event_loop()

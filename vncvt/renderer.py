@@ -118,6 +118,26 @@ def _build_256_palette() -> list[tuple[int, int, int]]:
 _PALETTE_256 = _build_256_palette()
 
 
+def _cell_in_selection(
+    col: int,
+    row: int,
+    sel: tuple[tuple[int, int], tuple[int, int]] | None,
+) -> bool:
+    """Return True if (col, row) lies within the normalized selection."""
+    if sel is None:
+        return False
+    (sc, sr), (ec, er) = sel
+    if row < sr or row > er:
+        return False
+    if row == sr and row == er:
+        return sc <= col <= ec
+    if row == sr:
+        return col >= sc
+    if row == er:
+        return col <= ec
+    return True
+
+
 class TerminalRenderer:
     """Renders a pyte Screen to an RGBX pixel buffer with amber-tinted colors."""
 
@@ -224,9 +244,17 @@ class TerminalRenderer:
         return DEFAULT_FG
 
     def render_dirty(
-        self, screen: pyte.Screen, dirty_rows: set[int]
+        self,
+        screen: pyte.Screen,
+        dirty_rows: set[int],
+        selection: tuple[tuple[int, int], tuple[int, int]] | None = None,
     ) -> list[tuple[int, int, int, int, "Image.Image"]]:
-        """Re-render dirty rows. Returns list of (x, y, w, h, PIL.Image) rectangles."""
+        """Re-render dirty rows. Returns list of (x, y, w, h, PIL.Image) rectangles.
+
+        If `selection` is given as ``((start_col, start_row), (end_col, end_row))``
+        in reading order, cells inside the range are drawn with inverted
+        foreground/background colors to indicate highlight.
+        """
         if not dirty_rows:
             return []
 
@@ -259,6 +287,11 @@ class TerminalRenderer:
                 bg = self._resolve_color(char.bg, False, is_bg=True)
 
                 if char.reverse:
+                    fg, bg = bg, fg
+
+                # Selection highlight: invert after reverse handling so a
+                # reverse-video cell inside a selection returns to normal.
+                if _cell_in_selection(col, row, selection):
                     fg, bg = bg, fg
 
                 # Determine cell span via wcwidth.
@@ -363,10 +396,14 @@ class TerminalRenderer:
         self._prev_cursor = (cx, cy)
         return (x, y, cell_px, self.cell_height, cursor_img)
 
-    def full_render(self, screen: pyte.Screen) -> "Image.Image":
+    def full_render(
+        self,
+        screen: pyte.Screen,
+        selection: tuple[tuple[int, int], tuple[int, int]] | None = None,
+    ) -> "Image.Image":
         """Render the entire screen. Returns the full PIL Image."""
         all_rows = set(range(self.rows))
-        self.render_dirty(screen, all_rows)
+        self.render_dirty(screen, all_rows, selection=selection)
         cursor = self.render_cursor(screen)
         if cursor:
             x, y, _, _, cursor_img = cursor
