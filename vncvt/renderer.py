@@ -1,11 +1,15 @@
 """Terminal-to-pixel rendering with VT220 amber-tinted color scheme."""
 
+import logging
 import shutil
 import subprocess
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 import pyte
+import wcwidth
+
+log = logging.getLogger(__name__)
 
 
 # Amber-tinted ANSI color palette
@@ -141,13 +145,24 @@ class TerminalRenderer:
             ImageFont.truetype(bold_path, font_size) if bold_path else self.font
         )
 
-        # Measure character cell
-        bbox = self.font.getbbox("M")
-        self.cell_width = bbox[2] - bbox[0]
+        # Measure character cell using advance width, not ink bbox.
+        # getlength() returns the horizontal advance — the correct metric for
+        # grid layout in a monospace font.
+        self.cell_width = int(round(self.font.getlength("M")))
         ascent, descent = self.font.getmetrics()
         self.cell_height = ascent + descent
-        self._x_offset = -bbox[0]  # compensate for left bearing
+        self._x_offset = 0
         self._y_offset = 0
+
+        # Warn if bold font has a different advance (would cause grid drift).
+        if self.font_bold is not self.font:
+            bold_adv = int(round(self.font_bold.getlength("M")))
+            if bold_adv != self.cell_width:
+                log.warning(
+                    "Bold font advance (%d) != regular (%d); bold glyphs "
+                    "will be clipped to the regular cell width",
+                    bold_adv, self.cell_width,
+                )
 
         self.width = cols * self.cell_width
         self.height = rows * self.cell_height
@@ -228,9 +243,15 @@ class TerminalRenderer:
             )
 
             line = screen.buffer[row]
+            skip_next = 0
             for col in range(self.cols):
+                if skip_next:
+                    skip_next -= 1
+                    continue
+
                 char = line[col]
                 x = col * self.cell_width
+                ch = char.data
 
                 fg = self._resolve_color(char.fg, char.bold, is_bg=False)
                 bg = self._resolve_color(char.bg, False, is_bg=True)
@@ -238,28 +259,64 @@ class TerminalRenderer:
                 if char.reverse:
                     fg, bg = bg, fg
 
-                # Draw cell background if not default
+                # Determine cell span via wcwidth.
+                #   2  -> double-wide (CJK, some emoji)
+                #   1  -> normal
+                #   0  -> combining mark (overlay onto previous cell)
+                #  -1  -> control/unassigned (treat as 1)
+                w = wcwidth.wcwidth(ch) if ch else 1
+                cells = 2 if w == 2 else 1
+                cell_px = self.cell_width * cells
+
+                # Combining mark: overlay on previous cell without touching bg.
+                if w == 0 and col > 0 and ch:
+                    font = self.font_bold if char.bold else self.font
+                    prev_x = (col - 1) * self.cell_width
+                    draw.text(
+                        (prev_x + self._x_offset, y + self._y_offset),
+                        ch, font=font, fill=fg,
+                    )
+                    continue
+
+                # Draw cell background if not default.
                 if bg != DEFAULT_BG:
                     draw.rectangle(
-                        [x, y, x + self.cell_width - 1, y + self.cell_height - 1],
+                        [x, y, x + cell_px - 1, y + self.cell_height - 1],
                         fill=bg,
                     )
 
-                # Draw character
-                ch = char.data
+                # Draw character with overflow clipping.
                 if ch and ch != " ":
                     font = self.font_bold if char.bold else self.font
-                    draw.text(
-                        (x + self._x_offset, y + self._y_offset),
-                        ch,
-                        font=font,
-                        fill=fg,
-                    )
+                    glyph_adv = int(round(font.getlength(ch)))
+                    if glyph_adv > cell_px:
+                        # Glyph wider than its cell: render to a temp RGBA
+                        # image and paste cropped to the cell bounds.
+                        tmp = Image.new(
+                            "RGBA",
+                            (glyph_adv + 4, self.cell_height),
+                            (0, 0, 0, 0),
+                        )
+                        tdraw = ImageDraw.Draw(tmp)
+                        tdraw.text(
+                            (self._x_offset, self._y_offset),
+                            ch, font=font, fill=fg + (255,),
+                        )
+                        cropped = tmp.crop((0, 0, cell_px, self.cell_height))
+                        self.image.paste(cropped, (x, y), cropped)
+                    else:
+                        draw.text(
+                            (x + self._x_offset, y + self._y_offset),
+                            ch, font=font, fill=fg,
+                        )
 
                 # Underline
                 if char.underscore:
                     ul_y = y + self.cell_height - 2
-                    draw.line([x, ul_y, x + self.cell_width - 1, ul_y], fill=fg)
+                    draw.line([x, ul_y, x + cell_px - 1, ul_y], fill=fg)
+
+                if cells == 2:
+                    skip_next = 1
 
             # Extract row pixels
             row_img = self.image.crop((0, y, self.width, y + self.cell_height))
@@ -275,32 +332,34 @@ class TerminalRenderer:
         if cx >= self.cols or cy >= self.rows:
             return None
 
+        char = screen.buffer[cy][cx]
+        ch = char.data
+        w = wcwidth.wcwidth(ch) if ch else 1
+        cells = 2 if w == 2 else 1
+        cell_px = self.cell_width * cells
+
         x = cx * self.cell_width
         y = cy * self.cell_height
 
-        # Draw cursor as a filled block with inverted colors
+        # Draw cursor as a filled block with inverted colors.
         cursor_img = self.image.crop(
-            (x, y, x + self.cell_width, y + self.cell_height)
+            (x, y, x + cell_px, y + self.cell_height)
         ).copy()
         draw = ImageDraw.Draw(cursor_img)
         draw.rectangle(
-            [0, 0, self.cell_width - 1, self.cell_height - 1],
+            [0, 0, cell_px - 1, self.cell_height - 1],
             fill=CURSOR_COLOR,
         )
 
-        # Redraw character under cursor with inverted color
-        char = screen.buffer[cy][cx]
-        ch = char.data
+        # Redraw character under cursor with inverted color.
         if ch and ch != " ":
             draw.text(
                 (self._x_offset, self._y_offset),
-                ch,
-                font=self.font,
-                fill=DEFAULT_BG,
+                ch, font=self.font, fill=DEFAULT_BG,
             )
 
         self._prev_cursor = (cx, cy)
-        return (x, y, self.cell_width, self.cell_height, cursor_img.tobytes())
+        return (x, y, cell_px, self.cell_height, cursor_img.tobytes())
 
     def full_render(self, screen: pyte.Screen) -> bytes:
         """Render the entire screen. Returns RGBX pixel bytes."""
