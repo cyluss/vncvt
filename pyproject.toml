@@ -13,6 +13,18 @@ dependencies = [
 [project.scripts]
 vncvt = "vncvt.__main__:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "asyncvnc>=1.1",
+    "imagehash>=4.3",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

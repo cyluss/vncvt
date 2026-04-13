@@ -1,4 +1,4 @@
-name: Loopback Test
+name: Regression Tests
 
 on:
   push:
@@ -7,7 +7,29 @@ on:
     branches: [main]
 
 jobs:
-  linux-loopback:
+  linux-pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies (including dev group)
+        run: uv sync --all-groups
+
+      - name: Run pytest suite
+        run: uv run pytest tests/ -v
+
+      - name: Upload baselines
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baselines
+          path: tests/baselines/baselines.json
+          if-no-files-found: ignore
+
+  linux-vncdo-cross-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,37 +40,35 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Start VNC server (None auth)
+      - name: Install vncdotool CLI (third-party real client)
         run: |
-          uv run python -m vncvt --port 5996 &
-          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends vncdotool
+
+      - name: Start vncvt and drive with vncdo
+        run: |
+          uv run python -m vncvt --port 5995 &
+          SERVER_PID=$!
           sleep 2
+          vncdo -s 127.0.0.1::5995 \
+                type "echo vncdo_works_on_linux" key enter \
+                capture /tmp/vncdo_cross.png
+          kill "$SERVER_PID" 2>/dev/null || true
+          test -f /tmp/vncdo_cross.png
+          uv run python -c "
+          from PIL import Image
+          img = Image.open('/tmp/vncdo_cross.png')
+          assert img.size[0] > 700, f'unexpected width {img.size}'
+          print('cross-check image size:', img.size)
+          "
 
-      - name: Run loopback test (RGBX default)
-        run: uv run python test_loopback.py 5996 screenshot.png
-
-      - name: Run Apple-like BGRX pixel format test
-        run: uv run python test_apple_pixelfmt.py 5996 screenshot_apple.png
-
-      - name: Run drag-to-copy selection test
-        run: uv run python test_selection.py 5996
-
-      - name: Run paste + padding + line-refresh test
-        run: uv run python test_paste.py 5996 screenshot_paste.png
-
-      - name: Stop server
-        if: always()
-        run: kill "$SERVER_PID" 2>/dev/null || true
-
-      - name: Upload screenshots
+      - name: Upload vncdo screenshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-screenshots
-          path: |
-            screenshot.png
-            screenshot_apple.png
-            screenshot_paste.png
+          name: vncdo-cross-check
+          path: /tmp/vncdo_cross.png
+          if-no-files-found: ignore
 
   macos-screen-sharing:
     runs-on: macos-latest
@@ -70,11 +90,8 @@ jobs:
 
       - name: Open Screen Sharing and drive session
         run: |
-          # Apple's Screen Sharing.app is the default handler for vnc://
           open "vnc://testpass@127.0.0.1:5900"
           sleep 6
-          # Send a keystroke via System Events (may need TCC grants on
-          # first-time runner — we tolerate failure via continue-on-error)
           osascript -e 'tell application "System Events" to keystroke "echo mac-ci-works"' || true
           sleep 1
           osascript -e 'tell application "System Events" to key code 36' || true
