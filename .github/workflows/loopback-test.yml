@@ -40,19 +40,17 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Install vncdotool CLI (third-party real client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends vncdotool
-
       - name: Start vncvt and drive with vncdo
         run: |
           uv run python -m vncvt --port 5995 &
           SERVER_PID=$!
           sleep 2
-          vncdo -s 127.0.0.1::5995 \
-                type "echo vncdo_works_on_linux" key enter \
-                capture /tmp/vncdo_cross.png
+          # vncdotool is a PyPI-only package (no apt package exists).
+          # `uv run --with` pulls it into an ephemeral environment for
+          # this one invocation, avoiding any dev-group pollution.
+          uv run --with vncdotool vncdo -s 127.0.0.1::5995 \
+                 type "echo vncdo_works_on_linux" key enter \
+                 capture /tmp/vncdo_cross.png
           kill "$SERVER_PID" 2>/dev/null || true
           test -f /tmp/vncdo_cross.png
           uv run python -c "
@@ -96,16 +94,45 @@ jobs:
           sleep 1
           osascript -e 'tell application "System Events" to key code 36' || true
           sleep 2
-          screencapture -x -o screenshot-mac.png || true
+
+      - name: Capture Screen Sharing window only
+        run: |
+          # Grab the Screen Sharing window ID via AppleScript. The
+          # process may be named "Screen Sharing" on older macOS and
+          # "Screen Sharing" or "ScreenSharingAgent" on newer — try
+          # the common name first and fall back to a pgrep sweep.
+          WINDOW_ID=$(osascript -e '
+            tell application "System Events"
+              tell process "Screen Sharing"
+                return id of window 1
+              end tell
+            end tell
+          ' 2>/dev/null || echo "")
+          if [ -z "$WINDOW_ID" ]; then
+            echo "Could not find Screen Sharing window; falling back to full-desktop capture"
+            screencapture -x -o screenshot-mac-window.png || true
+          else
+            echo "Screen Sharing window id: $WINDOW_ID"
+            screencapture -x -l "$WINDOW_ID" screenshot-mac-window.png || true
+          fi
+          ls -la screenshot-mac-window.png || true
+
+      - name: Crop window and compare dHash
+        run: |
+          uv run --with imagehash --with pillow \
+            python tests/crop_and_hash_macos.py
 
       - name: Stop server
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
 
-      - name: Upload macOS screenshot
+      - name: Upload macOS screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-screenshot
-          path: screenshot-mac.png
+          name: macos-screenshots
+          path: |
+            screenshot-mac-window.png
+            screenshot-mac-cropped.png
+            tests/baselines/baselines-macos.json
           if-no-files-found: ignore
