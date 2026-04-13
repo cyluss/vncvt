@@ -55,7 +55,14 @@ class Terminal:
             os.environ["TERM"] = "xterm-256color"
             os.environ["COLUMNS"] = str(cols)
             os.environ["LINES"] = str(rows)
-            os.execvp(shell, [shell])
+            # Spawn as a login shell (argv[0] prefixed with "-") so the
+            # user's profile (~/.bash_profile, ~/.zprofile, /etc/profile)
+            # gets sourced — matches what Terminal.app does on macOS and
+            # what `ssh user@host` does on Linux. Without this the shell
+            # is interactive but not login, which silently skips most
+            # environment setup the user expects.
+            argv0 = "-" + os.path.basename(shell)
+            os.execvp(shell, [argv0])
         else:
             # Parent process
             os.close(slave_fd)
