@@ -58,6 +58,7 @@ class VncvtHandle:
     scene_dir: Path
     control_socket: Path
     _socket_dir: Path = field(repr=False)
+    _stderr_fp: object = field(default=None, repr=False)
 
     def __iter__(self) -> Iterator[object]:
         yield self.host
@@ -103,10 +104,17 @@ def start_vncvt(
     if log_rfb:
         env["VNCVT_LOG_RFB"] = "1"
 
+    # Stream stderr to a log file under scene_root so the RFB trace
+    # (the only diagnostic we have when something goes wrong end-to-
+    # end) gets uploaded with the scene-dump artifact. Piping to a
+    # PIPE we don't drain would deadlock the child once the OS
+    # buffer fills.
+    stderr_log = scene_root / "vncvt-server.log"
+    stderr_fp = open(stderr_log, "wb")
     proc = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=stderr_fp,
         env=env,
     )
     try:
@@ -118,6 +126,7 @@ def start_vncvt(
             time.sleep(0.05)
     except Exception:
         proc.kill()
+        stderr_fp.close()
         shutil.rmtree(socket_dir, ignore_errors=True)
         raise
 
@@ -128,6 +137,7 @@ def start_vncvt(
         scene_dir=scene_root,
         control_socket=control_socket,
         _socket_dir=socket_dir,
+        _stderr_fp=stderr_fp,
     )
 
 
@@ -149,6 +159,11 @@ def stop_vncvt(handle: VncvtHandle) -> None:
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 pass
+    if handle._stderr_fp is not None:
+        try:
+            handle._stderr_fp.close()
+        except Exception:
+            pass
     shutil.rmtree(handle._socket_dir, ignore_errors=True)
 
 

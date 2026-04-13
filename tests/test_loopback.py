@@ -185,11 +185,63 @@ def screen_sharing_driver(
 # ---------------------------------------------------------------------------
 
 
+_ARTIFACT_ROOT = Path(__file__).parent / "scene-dumps"
+
+
+def _stable_scene_root(name: str) -> Path:
+    """Per-test stable artifact dir. Persists across the test so the
+    workflow's upload-artifact step can see what was captured even
+    when the scene match assertion fails — pytest's tmp_path is
+    cleaned and lives under /private/var/folders, neither of which
+    survives to artifact upload."""
+    root = _ARTIFACT_ROOT / name
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    return root
+
+
+def _dump_diagnostics(scene_root: Path, label: str) -> None:
+    """Best-effort dump of diagnostic state to the scene root, run in
+    a finally block so a failing test still produces an artifact."""
+    diag = scene_root / f"{label}.diag.txt"
+    try:
+        with diag.open("w") as f:
+            f.write(f"=== pgrep Screen Sharing ===\n")
+            f.write(subprocess.run(
+                ["pgrep", "-fl", "Screen Sharing"],
+                capture_output=True, text=True,
+            ).stdout or "(none)\n")
+            f.write(f"\n=== osascript window probe ===\n")
+            probe = subprocess.run(
+                ["osascript",
+                 "-e", 'tell application "System Events"',
+                 "-e", '  if not (exists process "Screen Sharing") then return "no process"',
+                 "-e", '  tell process "Screen Sharing"',
+                 "-e", '    set out to "windows: " & (count of windows) & return',
+                 "-e", '    repeat with w in windows',
+                 "-e", '      set out to out & "  - name=" & (name of w) & " pos=" & (position of w as text) & " size=" & (size of w as text) & return',
+                 "-e", '    end repeat',
+                 "-e", '    return out',
+                 "-e", '  end tell',
+                 "-e", 'end tell'],
+                capture_output=True, text=True,
+            )
+            f.write(probe.stdout or "")
+            if probe.stderr:
+                f.write(f"\nstderr: {probe.stderr}\n")
+    except Exception as e:
+        try:
+            diag.write_text(f"diagnostics dump failed: {e}\n")
+        except Exception:
+            pass
+
+
 @pytest.mark.loopback
 @pytest.mark.skipif(IS_MAC, reason="vncdotool driver is the linux loopback")
-def test_loopback_vncdo(tmp_path):
-    scene_root = tmp_path / "scenes"
-    capture = tmp_path / "client.png"
+def test_loopback_vncdo():
+    scene_root = _stable_scene_root("loopback-linux")
+    capture = scene_root / "client.png"
     with vncvt_session(scene_root=scene_root) as srv:
         with vncdo_driver(srv.host, srv.port, capture):
             scene_dir = _trigger_dump_sync(srv.control_socket, "loopback")
@@ -201,16 +253,24 @@ def test_loopback_vncdo(tmp_path):
 @pytest.mark.skipif(
     not IS_MAC, reason="Screen Sharing driver is the macOS loopback"
 )
-def test_loopback_screen_sharing(tmp_path):
-    scene_root = tmp_path / "scenes"
-    capture = tmp_path / "client.png"
-    with vncvt_session(
-        "--password", "testpass", scene_root=scene_root
-    ) as srv:
-        with screen_sharing_driver(srv.host, srv.port, capture):
-            scene_dir = _trigger_dump_sync(srv.control_socket, "loopback")
-            shutil.copy(capture, scene_dir / "scene.client.png")
-            verify_scene(scene_dir, **MAC_THRESHOLDS)
+def test_loopback_screen_sharing():
+    scene_root = _stable_scene_root("loopback-macos")
+    capture = scene_root / "client.png"
+    try:
+        with vncvt_session(
+            "--password", "testpass", scene_root=scene_root
+        ) as srv:
+            with screen_sharing_driver(srv.host, srv.port, capture):
+                _dump_diagnostics(scene_root, "after_capture")
+                scene_dir = _trigger_dump_sync(
+                    srv.control_socket, "loopback"
+                )
+                if capture.exists():
+                    shutil.copy(capture, scene_dir / "scene.client.png")
+                verify_scene(scene_dir, **MAC_THRESHOLDS)
+    except Exception:
+        _dump_diagnostics(scene_root, "on_failure")
+        raise
 
 
 def _trigger_dump_sync(control_socket: Path, name: str) -> Path:
