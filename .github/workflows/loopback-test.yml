@@ -49,12 +49,16 @@ jobs:
         run: uv sync
 
       - name: Start vncvt with scene-dump control socket
+        env:
+          VNCVT_LOG_RFB: "1"
         run: |
           rm -f /tmp/vncvt-scene.sock
           mkdir -p /tmp/vncvt-scenes
           uv run python -m vncvt --port 5995 \
+               --log-traffic \
                --scene-dump-dir /tmp/vncvt-scenes \
-               --scene-control-socket /tmp/vncvt-scene.sock &
+               --scene-control-socket /tmp/vncvt-scene.sock \
+               >/tmp/vncvt-server.log 2>&1 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
           # Wait for both the RFB port and the control socket.
           for _ in $(seq 1 20); do
@@ -96,7 +100,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scene-dumps-linux-vncdo
-          path: /tmp/vncvt-scenes/
+          path: |
+            /tmp/vncvt-scenes/
+            /tmp/vncvt-server.log
           if-no-files-found: ignore
 
   macos-screen-sharing:
@@ -112,17 +118,30 @@ jobs:
         run: uv sync
 
       - name: Start vncvt with VNC auth + scene-dump control socket
+        env:
+          VNCVT_LOG_RFB: "1"
         run: |
           rm -f /tmp/vncvt-scene.sock
           mkdir -p /tmp/vncvt-scenes
+          # Redirect both streams to a log file so we capture the
+          # full RFB trace (--log-traffic = hex of every byte, plus
+          # VNCVT_LOG_RFB=1 = high-level message labels) as an
+          # artifact. Without this the GitHub Actions UI buffers the
+          # output and we lose the diagnostic context we need to
+          # understand why Screen Sharing.app hangs at "Connecting...".
           uv run python -m vncvt --port 5900 --password testpass \
+               --log-traffic \
                --scene-dump-dir /tmp/vncvt-scenes \
-               --scene-control-socket /tmp/vncvt-scene.sock &
+               --scene-control-socket /tmp/vncvt-scene.sock \
+               >/tmp/vncvt-server.log 2>&1 &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
           for _ in $(seq 1 20); do
             if [ -S /tmp/vncvt-scene.sock ]; then break; fi
             sleep 0.2
           done
+          # Sanity: confirm the process is actually listening on 5900.
+          lsof -i :5900 -n -P || true
+          ps -p "$!" -o pid,stat,command || true
 
       - name: Open Screen Sharing and drive session
         run: |
@@ -132,6 +151,15 @@ jobs:
           sleep 1
           osascript -e 'tell application "System Events" to key code 36' || true
           sleep 2
+          # Snapshot the post-connect state of the network + processes
+          # so we can tell, after the fact, whether Screen Sharing
+          # actually established a TCP connection to vncvt.
+          echo "--- lsof on 5900 after drive ---"
+          lsof -i :5900 -n -P || true
+          echo "--- Screen Sharing process ---"
+          pgrep -fl "Screen Sharing" || true
+          echo "--- vncvt server log tail (50 lines) ---"
+          tail -n 50 /tmp/vncvt-server.log || true
 
       - name: Capture Screen Sharing window only
         run: |
@@ -192,6 +220,7 @@ jobs:
           name: scene-dumps-macos
           path: |
             /tmp/vncvt-scenes/
+            /tmp/vncvt-server.log
             screenshot-mac-window.png
             screenshot-mac-cropped.png
             tests/baselines/baselines-macos.json

@@ -3,6 +3,7 @@
 import asyncio
 import hmac
 import logging
+import os
 import secrets
 import struct
 import zlib
@@ -11,6 +12,16 @@ from .terminal import Terminal
 from .renderer import TerminalRenderer
 
 log = logging.getLogger(__name__)
+
+# Opt-in verbose RFB protocol tracing. Set VNCVT_LOG_RFB=1 in the
+# environment to log every handshake step and every client message
+# received. CI uses this to diagnose client-compatibility hangs.
+_RFB_TRACE = os.environ.get("VNCVT_LOG_RFB") == "1"
+
+
+def _trace(fmt: str, *args: object) -> None:
+    if _RFB_TRACE:
+        log.info("RFB: " + fmt, *args)
 
 
 # Pillow raw modes supported for 32bpp true-colour output.
@@ -339,27 +350,40 @@ class RFBClient:
 
     async def _handshake(self) -> None:
         """Perform RFB 3.8 protocol handshake."""
+        peer = self.writer.get_extra_info("peername")
+        _trace("handshake start peer=%r", peer)
+
         # 1. Protocol version
         self.writer.write(b"RFB 003.008\n")
         await self.writer.drain()
 
         # 2. Read client version
-        await self.reader.readexactly(12)
+        client_version = await self.reader.readexactly(12)
+        _trace("client version=%r", bytes(client_version))
 
-        # 3. Security types: offer VNC auth (2) + None (1) if password is
-        #    configured; otherwise offer only None.
+        # 3. Security types. RFB 3.8 §7.1.2: the server sends a
+        #    ``number-of-security-types`` byte followed by that many
+        #    security-type bytes. We offer exactly ONE type per session:
+        #      - VNC auth (2) if a password is configured
+        #      - None    (1) otherwise
+        #    Offering both would create a password-bypass hole (the
+        #    client could just pick None) and also confuses at least
+        #    Apple's Screen Sharing.app, which hangs when a server
+        #    advertises both modes simultaneously.
         if self.server.password:
-            self.writer.write(bytes([2, 2, 1]))  # 2 types: VNC, None
+            self.writer.write(bytes([1, 2]))  # 1 type offered: VNC auth
         else:
-            self.writer.write(bytes([1, 1]))     # 1 type:  None
+            self.writer.write(bytes([1, 1]))  # 1 type offered: None
         await self.writer.drain()
 
         # 4. Read selected security type
         selected = (await self.reader.readexactly(1))[0]
+        _trace("client selected security type %d", selected)
 
         # 5. Run auth for the selected type, then send SecurityResult.
         if selected == 2:
             ok = await self._vnc_auth()
+            _trace("VNC auth result ok=%s", ok)
             if not ok:
                 self.writer.write(struct.pack(">I", 1))
                 reason = b"VNC authentication failed"
@@ -367,12 +391,26 @@ class RFBClient:
                 await self.writer.drain()
                 raise ConnectionError("VNC auth failed")
             self.writer.write(struct.pack(">I", 0))
-        else:
+        elif selected == 1:
             self.writer.write(struct.pack(">I", 0))
+        else:
+            # Client picked a type we never offered. Fail loudly.
+            log.warning(
+                "RFB: client selected unsupported security type %d; "
+                "offered %s",
+                selected,
+                "[2]" if self.server.password else "[1]",
+            )
+            self.writer.write(struct.pack(">I", 1))
+            reason = b"unsupported security type"
+            self.writer.write(struct.pack(">I", len(reason)) + reason)
+            await self.writer.drain()
+            raise ConnectionError(f"unsupported security type {selected}")
         await self.writer.drain()
 
         # 6. ClientInit (shared flag)
-        await self.reader.readexactly(1)
+        shared = (await self.reader.readexactly(1))[0]
+        _trace("ClientInit shared=%d", shared)
 
         # 7. ServerInit
         renderer = self.server.renderer
@@ -400,6 +438,7 @@ class RFBClient:
         """Process client messages indefinitely."""
         while True:
             msg_type = (await self.reader.readexactly(1))[0]
+            _trace("msg type=%d", msg_type)
 
             if msg_type == 0:    # SetPixelFormat
                 raw = await self.reader.readexactly(19)  # 3 pad + 16 pf
@@ -519,7 +558,20 @@ class RFBClient:
                     await self._send_full_update(fb)
 
             else:
-                log.warning("Unknown message type: %d", msg_type)
+                # Unknown message types are a protocol error from our
+                # perspective. We don't know how many payload bytes
+                # follow, so we cannot keep reading — any further
+                # readexactly() would interpret payload as a message
+                # header and silently desync, producing a "connected
+                # but nothing happens" hang. Log loudly and close.
+                log.warning(
+                    "RFB: unknown client message type %d (0x%02x); "
+                    "closing connection to avoid desync",
+                    msg_type, msg_type,
+                )
+                raise ConnectionError(
+                    f"unknown RFB message type {msg_type}"
+                )
 
     async def _send_desktop_size(self, width: int, height: int, status: int = 0) -> None:
         """Send ExtendedDesktopSize pseudo-encoding to confirm resize."""

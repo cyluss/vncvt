@@ -56,8 +56,9 @@ def main() -> None:
     parser.add_argument(
         "--scene-control-socket", default=None,
         help="If set, open a Unix-domain-socket listener at this path. "
-             "Tests send 'DUMP <name>\\n' to trigger a scene dump. "
-             "Requires --scene-dump-dir.",
+             "Clients send one JSON document per line: "
+             "{\"version\":1,\"op\":\"dump\",\"name\":\"<name>\"} to "
+             "trigger a scene dump. Requires --scene-dump-dir.",
     )
     args = parser.parse_args()
 

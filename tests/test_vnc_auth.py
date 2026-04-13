@@ -99,3 +99,29 @@ def test_no_password_offers_only_none_auth(vncvt_server):
         assert sec_types == [1], f"expected [None=1], got {sec_types}"
     finally:
         s.close()
+
+
+def test_password_offers_only_vnc_auth(vncvt_server_factory):
+    """When ``--password`` is set, the server must advertise VNC auth
+    (2) and MUST NOT also advertise None (1). Offering both would
+    allow any client to bypass the password entirely by selecting
+    None, and has been observed to hang Apple's Screen Sharing.app
+    during the security-type negotiation step.
+    """
+    host, port, _ = vncvt_server_factory("--password", "hunter2")
+    s = socket.create_connection((host, port), timeout=5.0)
+    try:
+        _handshake_version(s)
+        n_sec = s.recv(1)[0]
+        assert n_sec == 1, (
+            f"password-protected server must offer exactly 1 security "
+            f"type, got {n_sec}"
+        )
+        sec_types = list(s.recv(n_sec))
+        assert sec_types == [2], (
+            f"password-protected server must offer ONLY VNC auth "
+            f"(type 2). Got {sec_types}. Offering None (1) alongside "
+            f"VNC auth is a password-bypass hole."
+        )
+    finally:
+        s.close()
