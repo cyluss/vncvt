@@ -181,6 +181,75 @@ def test_control_socket_resize(vncvt_server):
     )
 
 
+def test_legacy_desktop_size_notification(vncvt_server):
+    """A client that advertises only -223 (legacy DesktopSize), like
+    Apple Screen Sharing.app does, must receive a -223 rect (12-byte
+    header, no payload) when the server-side resize fires — NOT a
+    -308 (ExtendedDesktopSize) rect, which is a different wire format
+    that legacy clients can't parse."""
+    handle = vncvt_server
+    s = socket.create_connection((handle.host, handle.port), timeout=5.0)
+    try:
+        _handshake_no_auth(s)
+        # Advertise Raw + only the legacy DesktopSize encoding. No -308.
+        _send_set_encodings(s, [0, -223])
+
+        # Trigger a server-side resize via the control socket. Use
+        # asyncio.run because trigger_server_dump in scenes.py is async
+        # and we're a sync test.
+        async def _do_resize() -> dict:
+            reader, writer = await asyncio.open_unix_connection(
+                path=str(handle.control_socket)
+            )
+            try:
+                writer.write(
+                    (json.dumps(
+                        {"version": 1, "op": "resize",
+                         "cols": 100, "rows": 30}
+                    ) + "\n").encode("utf-8")
+                )
+                await writer.drain()
+                line = await asyncio.wait_for(reader.readline(), timeout=3.0)
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+            return json.loads(line.decode("utf-8"))
+
+        reply = asyncio.run(_do_resize())
+        assert reply.get("ok") is True, f"resize failed: {reply}"
+
+        # Server now broadcasts notify_resize. We should receive a
+        # FramebufferUpdate with one rect carrying encoding -223 and
+        # NO payload after the 12-byte rect header (legacy format).
+        hdr = _read_exactly(s, 4)
+        assert hdr[0] == 0, f"expected FramebufferUpdate (0), got {hdr[0]}"
+        n_rects = struct.unpack(">H", hdr[2:4])[0]
+        assert n_rects == 1, f"expected 1 rect, got {n_rects}"
+        rect_hdr = _read_exactly(s, 12)
+        rx, ry, rw, rh, enc = struct.unpack(">HHHHi", rect_hdr)
+        assert enc == -223, (
+            f"expected legacy DesktopSize (-223), got {enc} — server "
+            f"is sending the extended form to a client that doesn't "
+            f"support it"
+        )
+        assert rw > 0 and rh > 0
+        # No further payload for -223; the next bytes should be the
+        # full framebuffer push (a second FramebufferUpdate). Just
+        # check that we can read its 4-byte header without the
+        # connection desyncing on stale -308 trailing bytes.
+        next_hdr = _read_exactly(s, 4)
+        assert next_hdr[0] == 0, (
+            "expected a full FramebufferUpdate to follow the resize "
+            f"notification, got msg type {next_hdr[0]} — likely the "
+            "server wrote stray bytes after the -223 rect"
+        )
+    finally:
+        s.close()
+
+
 def test_resize_unknown_op_rejected(vncvt_server):
     """Sanity check: the dispatcher still rejects unknown ops with a
     helpful error, instead of silently accepting them now that there

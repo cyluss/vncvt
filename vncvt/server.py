@@ -679,17 +679,42 @@ class RFBClient:
         # new dimensions before broadcasting; just push it.
         await self._send_full_update(self.server.renderer.image)
 
-    async def _send_desktop_size(self, width: int, height: int, status: int = 0) -> None:
-        """Send ExtendedDesktopSize pseudo-encoding to confirm resize."""
-        # FramebufferUpdate with 1 rect using encoding -308 (ExtendedDesktopSize)
-        # status: 0=ok, x/y encodes the status and reason
-        header = struct.pack(">BxH", 0, 1)
-        # x=status, y=0 (server-requested change)
-        rect_header = struct.pack(">HHHHi", status, 0, width, height, -308)
-        # 1 screen: id=0, x=0, y=0, width, height, flags=0
-        screen = struct.pack(">IHHHHI", 0, 0, 0, width, height, 0)
-        num_screens = struct.pack(">Bxxx", 1)
-        self.writer.write(header + rect_header + num_screens + screen)
+    async def _send_desktop_size(
+        self, width: int, height: int, status: int = 0
+    ) -> None:
+        """Notify the client of a new framebuffer size, using whichever
+        of the two desktop-size pseudo-encodings the client supports.
+
+        Per the RFB community wiki: "Servers and clients should support
+        both for maximum compatibility, but a server must only send the
+        extended version to a client asking for both." So:
+
+        - If the client advertised ExtendedDesktopSize (-308), send a
+          -308 rect (12-byte header + screen list) — the modern form,
+          preferred because it carries multi-screen info and a status
+          field for client-initiated requests.
+        - Otherwise, if it advertised DesktopSize (-223), send a -223
+          rect — just the 12-byte header alone, x/y ignored, w/h carry
+          the new size. This is the path Apple's Screen Sharing.app
+          takes; it advertises -223 but not -308.
+
+        The caller is responsible for checking that at least one of
+        the two pseudo-encodings is in self.encodings before calling
+        (notify_resize does this).
+        """
+        if -308 in self.encodings:
+            header = struct.pack(">BxH", 0, 1)  # FBU msg, nrects=1
+            rect_header = struct.pack(
+                ">HHHHi", status, 0, width, height, -308
+            )
+            num_screens = struct.pack(">Bxxx", 1)
+            screen = struct.pack(">IHHHHI", 0, 0, 0, width, height, 0)
+            self.writer.write(header + rect_header + num_screens + screen)
+        else:
+            # Legacy DesktopSize: just the rect header, no payload.
+            header = struct.pack(">BxH", 0, 1)
+            rect_header = struct.pack(">HHHHi", 0, 0, width, height, -223)
+            self.writer.write(header + rect_header)
         await self.writer.drain()
 
     async def _send_cut_text(self, text: str) -> None:
