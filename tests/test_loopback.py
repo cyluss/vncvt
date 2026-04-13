@@ -94,23 +94,38 @@ def _osascript(*lines: str) -> str:
     return res.stdout.strip()
 
 
-def _wait_for_screen_sharing_window(timeout: float = 15.0) -> str:
-    """Poll until Screen Sharing.app has a window open, return its id."""
+def _wait_for_screen_sharing_window(
+    timeout: float = 15.0,
+) -> tuple[int, int, int, int]:
+    """Poll until Screen Sharing.app has a window open, return its
+    bounds as (x, y, w, h).
+
+    Screen Sharing.app is officially unscriptable and its windows
+    don't expose ``AXIdentifier``, so ``id of window 1`` returns
+    empty even when a window exists. Use position + size from
+    System Events instead and pass the bounds to
+    ``screencapture -R x,y,w,h``.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        wid = _osascript(
+        out = _osascript(
             'tell application "System Events"',
+            '  if not (exists process "Screen Sharing") then return ""',
             '  tell process "Screen Sharing"',
-            '    try',
-            '      return id of window 1',
-            '    on error',
-            '      return ""',
-            '    end try',
+            '    if (count of windows) is 0 then return ""',
+            '    set p to position of window 1',
+            '    set s to size of window 1',
+            '    return ((item 1 of p) as text) & "," & ((item 2 of p) as text) & "," & ((item 1 of s) as text) & "," & ((item 2 of s) as text)',
             '  end tell',
             'end tell',
         )
-        if wid:
-            return wid
+        if out:
+            try:
+                x, y, w, h = (int(v) for v in out.split(","))
+                if w > 0 and h > 0:
+                    return x, y, w, h
+            except ValueError:
+                pass
         time.sleep(0.3)
     raise RuntimeError(
         f"Screen Sharing window did not appear within {timeout}s"
@@ -131,9 +146,9 @@ def screen_sharing_driver(
     """
     subprocess.run(["open", f"vnc://{host}:{port}"], check=True)
     try:
-        window_id = _wait_for_screen_sharing_window()
+        x, y, w, h = _wait_for_screen_sharing_window()
         # Give Screen Sharing a beat to actually paint the framebuffer
-        # after the window appears — the window ID exists before the
+        # after the window appears — the window exists before the
         # remote raster has been drawn.
         time.sleep(1.0)
         _osascript(
@@ -145,7 +160,11 @@ def screen_sharing_driver(
         )
         time.sleep(1.0)
         subprocess.run(
-            ["screencapture", "-x", "-l", window_id, str(capture_path)],
+            [
+                "screencapture", "-x",
+                "-R", f"{x},{y},{w},{h}",
+                str(capture_path),
+            ],
             check=True,
         )
         if not capture_path.exists():
