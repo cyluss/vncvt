@@ -90,9 +90,12 @@ def _spawn_vncvt(
     port = _free_port()
     scene_dir = tmp_path / "scenes"
     scene_dir.mkdir(parents=True, exist_ok=True)
-    # Unix socket paths must stay under 108 chars on Linux; pytest
-    # tmp_path under /tmp is short enough, but use a short name.
-    control_socket = tmp_path / "ctl.sock"
+    # Unix socket paths max at 104 bytes on macOS / 108 on Linux. pytest's
+    # tmp_path on macOS lives under /var/folders/... and easily exceeds that,
+    # so put the socket in a short /tmp dir instead. The scene dumps stay
+    # under tmp_path because they don't have the length limit.
+    socket_dir = Path(tempfile.mkdtemp(prefix="vncvt-ctl-", dir="/tmp"))
+    control_socket = socket_dir / "s"
 
     args = [
         "uv", "run", "python", "-m", "vncvt",
@@ -119,13 +122,15 @@ def _spawn_vncvt(
         proc.kill()
         raise
 
-    return VncvtHandle(
+    handle = VncvtHandle(
         host="127.0.0.1",
         port=port,
         proc=proc,
         scene_dir=scene_dir,
         control_socket=control_socket,
     )
+    handle._socket_dir = socket_dir
+    return handle
 
 
 def _teardown_vncvt(handle: VncvtHandle) -> None:
@@ -135,6 +140,9 @@ def _teardown_vncvt(handle: VncvtHandle) -> None:
     except subprocess.TimeoutExpired:
         handle.proc.kill()
         handle.proc.wait(timeout=2)
+    socket_dir = getattr(handle, "_socket_dir", None)
+    if socket_dir is not None:
+        shutil.rmtree(socket_dir, ignore_errors=True)
 
 
 def _archive_scenes(handle: VncvtHandle, archive_subdir: str) -> None:

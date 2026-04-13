@@ -49,6 +49,7 @@ FONT_SEARCH_PATHS = [
     "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
+    "/System/Library/Fonts/SFNSMono.ttf",
 ]
 
 BOLD_FONT_SEARCH_PATHS = [
