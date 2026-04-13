@@ -20,9 +20,9 @@ import pytest
 from vncvt.server import _vnc_encrypt
 
 
-def _handshake_version(s: socket.socket) -> None:
+def _handshake_version(s: socket.socket, minor: int = 8) -> None:
     assert s.recv(12) == b"RFB 003.008\n"
-    s.send(b"RFB 003.008\n")
+    s.send(f"RFB 003.{minor:03d}\n".encode("ascii"))
 
 
 def test_vnc_auth_accepts_correct_password(vncvt_server_factory):
@@ -97,6 +97,88 @@ def test_no_password_offers_only_none_auth(vncvt_server):
         assert n_sec == 1, f"expected 1 security type, got {n_sec}"
         sec_types = list(s.recv(n_sec))
         assert sec_types == [1], f"expected [None=1], got {sec_types}"
+    finally:
+        s.close()
+
+
+def test_rfb_33_vnc_auth_uses_uint32_security_type(vncvt_server_factory):
+    """RFB 3.3 §7.1.2: server sends a single u32 security-type value
+    (not a count-prefixed list). Apple's Screen Sharing.app on
+    macOS speaks 3.3, so this is the path that has to work for the
+    macos-screen-sharing CI job to succeed.
+    """
+    host, port, _ = vncvt_server_factory("--password", "hunter2")
+    s = socket.create_connection((host, port), timeout=5.0)
+    try:
+        _handshake_version(s, minor=3)
+
+        sec_type = struct.unpack(">I", s.recv(4))[0]
+        assert sec_type == 2, f"expected u32 VNC auth (2), got {sec_type}"
+
+        challenge = s.recv(16)
+        assert len(challenge) == 16
+        s.send(_vnc_encrypt(challenge, "hunter2"))
+
+        result = struct.unpack(">I", s.recv(4))[0]
+        assert result == 0, f"expected SecurityResult=0, got {result}"
+
+        s.send(bytes([1]))  # ClientInit shared flag
+        server_init = s.recv(24)
+        w, h = struct.unpack(">HH", server_init[0:4])
+        assert w > 0 and h > 0
+    finally:
+        s.close()
+
+
+def test_rfb_33_none_auth_skips_security_result(vncvt_server):
+    """RFB 3.3/3.7 do NOT send a SecurityResult when the negotiated
+    security type is None — the server must proceed straight to
+    ClientInit/ServerInit. Sending a stray u32 here would desync any
+    3.3 client.
+    """
+    host, port = vncvt_server
+    s = socket.create_connection((host, port), timeout=5.0)
+    try:
+        _handshake_version(s, minor=3)
+
+        sec_type = struct.unpack(">I", s.recv(4))[0]
+        assert sec_type == 1, f"expected u32 None (1), got {sec_type}"
+
+        # No SecurityResult — go straight to ClientInit + ServerInit.
+        s.send(bytes([1]))  # shared flag
+        server_init = s.recv(24)
+        w, h = struct.unpack(">HH", server_init[0:4])
+        assert w > 0 and h > 0
+    finally:
+        s.close()
+
+
+def test_rfb_37_failed_auth_omits_reason_string(vncvt_server_factory):
+    """RFB 3.7 sends SecurityResult on auth failure but, unlike 3.8,
+    does NOT follow it with a length-prefixed reason string. The
+    server should just close the connection after the u32.
+    """
+    host, port, _ = vncvt_server_factory("--password", "hunter2")
+    s = socket.create_connection((host, port), timeout=5.0)
+    try:
+        _handshake_version(s, minor=7)
+
+        n_sec = s.recv(1)[0]
+        sec_types = list(s.recv(n_sec))
+        assert sec_types == [2]
+        s.send(bytes([2]))
+
+        challenge = s.recv(16)
+        s.send(_vnc_encrypt(challenge, "wrong_password"))
+
+        result = struct.unpack(">I", s.recv(4))[0]
+        assert result == 1, f"expected SecurityResult=1, got {result}"
+
+        # No reason string in 3.7 — server must close immediately.
+        tail = s.recv(4)
+        assert tail == b"", (
+            f"expected immediate close after 3.7 SecurityResult, got {tail!r}"
+        )
     finally:
         s.close()
 

@@ -300,8 +300,19 @@ class RFBServer:
         self._running = False
 
 
+# RFB security types (RFC 6143 §7.2).
+SEC_INVALID = 0
+SEC_NONE = 1
+SEC_VNC = 2
+
+
 class RFBClient:
-    """Handles a single VNC client connection using the RFB 3.8 protocol."""
+    """Handles a single VNC client connection.
+
+    Speaks RFB 3.3, 3.7, or 3.8 — minor is negotiated per-connection
+    in ``_handshake``. The wire format of the security handshake
+    differs between 3.3 and 3.7+; see ``_negotiate_security``.
+    """
 
     def __init__(
         self,
@@ -333,6 +344,9 @@ class RFBClient:
         self._left_down = False
         self._last_pointer_cell: tuple[int, int] | None = None
 
+        # Negotiated RFB minor version (3, 7, or 8). Set by _handshake.
+        self.rfb_minor = 8
+
     async def run(self) -> None:
         await self._handshake()
         await self._message_loop()
@@ -348,67 +362,104 @@ class RFBClient:
         expected = _vnc_encrypt(challenge, self.server.password)
         return hmac.compare_digest(response, expected)
 
+    @staticmethod
+    def _parse_rfb_minor(client_version: bytes) -> int:
+        # RFC 6143 §6.1.1: any unrecognised 3.x must be treated as 3.3.
+        # Anything not parseable, or major != 3, falls back to 3.8 —
+        # same policy as xrdp's vnc/vnc.c negotiate_protocol_version.
+        if (
+            len(client_version) != 12
+            or not client_version.startswith(b"RFB ")
+            or client_version[7:8] != b"."
+            or client_version[11:12] != b"\n"
+        ):
+            return 8
+        try:
+            major = int(client_version[4:7])
+            minor = int(client_version[8:11])
+        except ValueError:
+            return 8
+        if major != 3:
+            return 8
+        if minor >= 8:
+            return 8
+        if minor >= 7:
+            return 7
+        return 3
+
+    async def _negotiate_security(self, minor: int) -> int:
+        # RFB 3.3: server picks the security type and sends a single
+        # uint32 — the client has no choice. RFB 3.7+: server sends a
+        # count-prefixed list and reads back the client's one-byte pick.
+        offered = SEC_VNC if self.server.password else SEC_NONE
+        if minor == 3:
+            self.writer.write(struct.pack(">I", offered))
+            await self.writer.drain()
+            _trace("RFB 3.3: server-decided security type %d", offered)
+            return offered
+
+        self.writer.write(bytes([1, offered]))
+        await self.writer.drain()
+        selected = (await self.reader.readexactly(1))[0]
+        _trace("client selected security type %d", selected)
+        if selected != offered:
+            log.warning(
+                "RFB: client selected unsupported security type %d; offered [%d]",
+                selected,
+                offered,
+            )
+            await self._send_security_result(
+                minor, ok=False, reason=b"unsupported security type"
+            )
+            raise ConnectionError(f"unsupported security type {selected}")
+        return selected
+
+    async def _send_security_result(
+        self, minor: int, ok: bool, reason: bytes
+    ) -> None:
+        # RFB 3.8 onwards adds a length-prefixed reason string after a
+        # failed SecurityResult. 3.3/3.7 just close the connection.
+        self.writer.write(struct.pack(">I", 0 if ok else 1))
+        if not ok and minor >= 8:
+            self.writer.write(struct.pack(">I", len(reason)) + reason)
+        await self.writer.drain()
+
     async def _handshake(self) -> None:
-        """Perform RFB 3.8 protocol handshake."""
         peer = self.writer.get_extra_info("peername")
         _trace("handshake start peer=%r", peer)
 
-        # 1. Protocol version
+        # 1. ProtocolVersion: advertise our highest supported minor.
         self.writer.write(b"RFB 003.008\n")
         await self.writer.drain()
 
-        # 2. Read client version
-        client_version = await self.reader.readexactly(12)
-        _trace("client version=%r", bytes(client_version))
+        # 2. Read client version and clamp to a minor we speak.
+        client_version = bytes(await self.reader.readexactly(12))
+        _trace("client version=%r", client_version)
+        self.rfb_minor = self._parse_rfb_minor(client_version)
+        _trace("negotiated RFB 3.%d", self.rfb_minor)
 
-        # 3. Security types. RFB 3.8 §7.1.2: the server sends a
-        #    ``number-of-security-types`` byte followed by that many
-        #    security-type bytes. We offer exactly ONE type per session:
-        #      - VNC auth (2) if a password is configured
-        #      - None    (1) otherwise
-        #    Offering both would create a password-bypass hole (the
-        #    client could just pick None) and also confuses at least
-        #    Apple's Screen Sharing.app, which hangs when a server
-        #    advertises both modes simultaneously.
-        if self.server.password:
-            self.writer.write(bytes([1, 2]))  # 1 type offered: VNC auth
-        else:
-            self.writer.write(bytes([1, 1]))  # 1 type offered: None
-        await self.writer.drain()
+        # 3. Security handshake (wire format depends on minor).
+        selected = await self._negotiate_security(self.rfb_minor)
 
-        # 4. Read selected security type
-        selected = (await self.reader.readexactly(1))[0]
-        _trace("client selected security type %d", selected)
-
-        # 5. Run auth for the selected type, then send SecurityResult.
-        if selected == 2:
+        # 4. Run auth and send SecurityResult per version semantics.
+        #    RFB 3.3/3.7 skip SecurityResult entirely for None auth and
+        #    proceed straight to ClientInit. 3.8 sends SecurityResult
+        #    for both auth types.
+        if selected == SEC_VNC:
             ok = await self._vnc_auth()
             _trace("VNC auth result ok=%s", ok)
-            if not ok:
-                self.writer.write(struct.pack(">I", 1))
-                reason = b"VNC authentication failed"
-                self.writer.write(struct.pack(">I", len(reason)) + reason)
-                await self.writer.drain()
-                raise ConnectionError("VNC auth failed")
-            self.writer.write(struct.pack(">I", 0))
-        elif selected == 1:
-            self.writer.write(struct.pack(">I", 0))
-        else:
-            # Client picked a type we never offered. Fail loudly.
-            log.warning(
-                "RFB: client selected unsupported security type %d; "
-                "offered %s",
-                selected,
-                "[2]" if self.server.password else "[1]",
+            await self._send_security_result(
+                self.rfb_minor, ok, b"VNC authentication failed"
             )
-            self.writer.write(struct.pack(">I", 1))
-            reason = b"unsupported security type"
-            self.writer.write(struct.pack(">I", len(reason)) + reason)
-            await self.writer.drain()
-            raise ConnectionError(f"unsupported security type {selected}")
-        await self.writer.drain()
+            if not ok:
+                raise ConnectionError("VNC auth failed")
+        elif selected == SEC_NONE:
+            if self.rfb_minor >= 8:
+                await self._send_security_result(self.rfb_minor, True, b"")
+        else:
+            raise ConnectionError(f"unexpected security type {selected}")
 
-        # 6. ClientInit (shared flag)
+        # 5. ClientInit (shared flag)
         shared = (await self.reader.readexactly(1))[0]
         _trace("ClientInit shared=%d", shared)
 
