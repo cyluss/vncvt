@@ -21,12 +21,20 @@ into the same directory by the test helper in ``tests/scenes.py``.
 
 A thin Unix-domain-socket control server is exposed so the dumper can
 be triggered from outside the Python process — tests, shell scripts,
-and the Mac CI job all talk to it the same way:
+and the Mac CI job all talk to it the same way.
 
-    printf 'DUMP my_scene_name\\n' | nc -U /tmp/vncvt-scene.sock
+Wire protocol: one JSON document per line, request/response style.
 
-The server responds with ``OK <scene_dir>\\n`` on success or
-``ERR <message>\\n`` on failure. See ``serve_control_socket`` below.
+    Request:  {"version": 1, "op": "dump", "name": "<scene_name>"}
+    Response: {"version": 1, "ok": true,  "scene_dir": "<path>"}
+              {"version": 1, "ok": false, "error":     "<reason>"}
+
+From shell:
+
+    echo '{"version":1,"op":"dump","name":"my_scene"}' \\
+        | nc -U /tmp/vncvt-scene.sock
+
+See ``serve_control_socket`` below.
 """
 
 from __future__ import annotations
@@ -223,17 +231,46 @@ class SceneDumper:
         return scene_dir
 
 
+PROTOCOL_VERSION = 1
+
+
+def _err(msg: str) -> bytes:
+    return (
+        json.dumps({"version": PROTOCOL_VERSION, "ok": False, "error": msg})
+        + "\n"
+    ).encode("utf-8")
+
+
+def _ok(scene_dir: Path) -> bytes:
+    return (
+        json.dumps(
+            {
+                "version": PROTOCOL_VERSION,
+                "ok": True,
+                "scene_dir": str(scene_dir),
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 async def serve_control_socket(
     dumper: SceneDumper,
     socket_path: Path,
 ) -> asyncio.base_events.Server:
     """Start an asyncio Unix-domain-socket server that triggers dumps.
 
-    Protocol is line-oriented ASCII:
+    Protocol is one JSON document per line. Request::
 
-        client -> server:   ``DUMP <name>\\n``
-        server -> client:   ``OK <scene_dir>\\n``    on success
-                            ``ERR <reason>\\n``     on failure
+        {"version": 1, "op": "dump", "name": "<scene_name>"}
+
+    Response (success)::
+
+        {"version": 1, "ok": true, "scene_dir": "<absolute path>"}
+
+    Response (failure)::
+
+        {"version": 1, "ok": false, "error": "<reason>"}
 
     Returns the started ``asyncio.Server``. Caller is responsible for
     serving it (via ``asyncio.create_task(server.serve_forever())``)
@@ -250,19 +287,49 @@ async def serve_control_socket(
             line = await reader.readline()
             if not line:
                 return
-            parts = line.decode("ascii", errors="replace").strip().split(None, 1)
-            if len(parts) != 2 or parts[0] != "DUMP":
-                writer.write(b"ERR expected 'DUMP <name>'\n")
+            try:
+                request = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError as e:
+                writer.write(_err(f"invalid JSON: {e}"))
                 await writer.drain()
                 return
-            name = parts[1]
+
+            if not isinstance(request, dict):
+                writer.write(_err("request must be a JSON object"))
+                await writer.drain()
+                return
+
+            version = request.get("version")
+            if version != PROTOCOL_VERSION:
+                writer.write(
+                    _err(
+                        f"unsupported version {version!r}; "
+                        f"expected {PROTOCOL_VERSION}"
+                    )
+                )
+                await writer.drain()
+                return
+
+            op = request.get("op")
+            if op != "dump":
+                writer.write(_err(f"unknown op {op!r}; expected 'dump'"))
+                await writer.drain()
+                return
+
+            name = request.get("name")
+            if not isinstance(name, str) or not name:
+                writer.write(_err("'name' must be a non-empty string"))
+                await writer.drain()
+                return
+
             try:
                 scene_dir = dumper.dump(name)
             except Exception as e:
-                writer.write(f"ERR {e}\n".encode("ascii"))
+                writer.write(_err(str(e)))
                 await writer.drain()
                 return
-            writer.write(f"OK {scene_dir}\n".encode("ascii"))
+
+            writer.write(_ok(scene_dir))
             await writer.drain()
         finally:
             writer.close()

@@ -73,9 +73,11 @@ jobs:
                  capture /tmp/vncdo_cross.png
           test -f /tmp/vncdo_cross.png
 
-          # Trigger the server-side 4-file dump and then copy the vncdo
-          # PNG in as the client-side artifact to complete the bundle.
-          printf 'DUMP vncdo_post_echo\n' | nc -U -N -w 3 /tmp/vncvt-scene.sock
+          # Trigger the server-side 4-file dump via JSON over the
+          # Unix control socket, then drop the vncdo PNG in as the
+          # client-side artifact to complete the bundle.
+          echo '{"version":1,"op":"dump","name":"vncdo_post_echo"}' \
+              | nc -U -N -w 3 /tmp/vncvt-scene.sock
           cp /tmp/vncdo_cross.png /tmp/vncvt-scenes/vncdo_post_echo/scene.client.png
 
           uv run python -c "
@@ -151,8 +153,10 @@ jobs:
 
       - name: Trigger scene dump and build bundle
         run: |
-          # Trigger the 4-file server-side dump via the control socket.
-          printf 'DUMP mac_post_echo\n' | nc -U /tmp/vncvt-scene.sock
+          # Trigger the 4-file server-side dump via JSON over the
+          # Unix control socket.
+          echo '{"version":1,"op":"dump","name":"mac_post_echo"}' \
+              | nc -U /tmp/vncvt-scene.sock
           # Crop the title bar off the window screenshot and copy it
           # in as the client-side scene file.
           uv run --with imagehash --with pillow python - <<'PY'

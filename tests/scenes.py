@@ -4,8 +4,9 @@ A *scene* is a named checkpoint during a test that snapshots the full
 rendering pipeline across five artifacts (see ``vncvt/scene_dump.py``
 for the four server-side ones). This module provides the glue:
 
-- Talks to the server's Unix-domain-socket control listener to
-  trigger the server-side dump (`DUMP <name>\\n` -> `OK <dir>\\n`).
+- Talks to the server's Unix-domain-socket control listener with a
+  small JSON request/response protocol to trigger the server-side
+  dump.
 - Captures the client-side framebuffer via asyncvnc and writes it
   next to the server files as ``scene.client.png``.
 - Returns the scene directory path so tests can make assertions
@@ -23,10 +24,16 @@ Usage inside a test:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import asyncvnc
 from PIL import Image
+
+# Kept in lockstep with vncvt.scene_dump.PROTOCOL_VERSION. Duplicating
+# the integer here avoids an import-time dependency from tests onto
+# the server's internals and keeps the protocol change-log local.
+_PROTOCOL_VERSION = 1
 
 
 async def trigger_server_dump(
@@ -34,7 +41,13 @@ async def trigger_server_dump(
     scene_name: str,
     timeout: float = 3.0,
 ) -> Path:
-    """Send a DUMP command and wait for the server's OK/ERR response.
+    """Send a dump request and wait for the server's JSON response.
+
+    Wire protocol (one JSON doc per line):
+
+        request:  {"version": 1, "op": "dump", "name": <name>}
+        response: {"version": 1, "ok": true, "scene_dir": "<path>"}
+                  {"version": 1, "ok": false, "error": "<reason>"}
 
     Returns the scene directory path the server reports. Raises
     ``RuntimeError`` on protocol errors or timeout.
@@ -42,7 +55,14 @@ async def trigger_server_dump(
     async def _do() -> Path:
         reader, writer = await asyncio.open_unix_connection(path=str(socket_path))
         try:
-            writer.write(f"DUMP {scene_name}\n".encode("ascii"))
+            payload = json.dumps(
+                {
+                    "version": _PROTOCOL_VERSION,
+                    "op": "dump",
+                    "name": scene_name,
+                }
+            ).encode("utf-8")
+            writer.write(payload + b"\n")
             await writer.drain()
             line = await reader.readline()
         finally:
@@ -51,10 +71,17 @@ async def trigger_server_dump(
                 await writer.wait_closed()
             except Exception:
                 pass
-        reply = line.decode("ascii", errors="replace").strip()
-        if reply.startswith("OK "):
-            return Path(reply[3:])
-        raise RuntimeError(f"scene dump failed: {reply!r}")
+        try:
+            reply = json.loads(line.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"scene dump returned non-JSON: {line!r} ({e})"
+            ) from e
+        if not isinstance(reply, dict):
+            raise RuntimeError(f"scene dump returned non-object: {reply!r}")
+        if reply.get("ok") is True and "scene_dir" in reply:
+            return Path(reply["scene_dir"])
+        raise RuntimeError(f"scene dump failed: {reply}")
 
     return await asyncio.wait_for(_do(), timeout=timeout)
 
