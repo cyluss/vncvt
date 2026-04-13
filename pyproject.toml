@@ -28,3 +28,7 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not loopback'"
+markers = [
+    "loopback: end-to-end CI loopback tests that spawn vncvt + drive a real VNC client (vncdotool on Linux, Screen Sharing.app on macOS). Opt in with `pytest -m loopback`.",
+]
