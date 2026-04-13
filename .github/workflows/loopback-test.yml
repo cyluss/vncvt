@@ -91,6 +91,18 @@ jobs:
           print('cross-check image size:', img.size)
           "
 
+      - name: Verify vncdo client matches server framebuffer
+        run: |
+          # Loopback (vncdo -> vncvt over localhost) should be nearly
+          # byte-identical. Tight thresholds.
+          uv run --with imagehash --with pillow \
+            python tests/check_scene_match.py \
+              /tmp/vncvt-scenes/vncdo_post_echo \
+              --tolerance 8 \
+              --min-std 3.0 \
+              --std-abs-slack 5.0 \
+              --std-rel-slack 0.75
+
       - name: Stop vncvt
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
