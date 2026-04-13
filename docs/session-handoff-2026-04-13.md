@@ -289,3 +289,111 @@ Before doing anything else, consider appending a short
 summarizing what you learned and pushed. Keeping each day's handoff
 local to a dated section makes the history of this problem readable
 for whoever picks it up next.
+
+## Session 2026-04-13 (afternoon) — RFB version dialect was the real bug
+
+**Headline**: `8493ced` was a real fix but not the cause of the Screen
+Sharing hang. The actual cause is a **wire-format mismatch**: vncvt's
+handshake was hardcoded to RFB 3.8 semantics, but Apple Screen
+Sharing.app on macos-latest speaks **RFB 003.003**, which expects a
+single `uint32` security-type value where 3.7+ expects a
+count-prefixed list. The client was waiting for 4 bytes while the
+server had only sent 2.
+
+### How it was found
+
+Reproduced locally on a real Mac for the first time. With the
+diagnostics that `8493ced` added (`VNCVT_LOG_RFB=1`), the trace made
+the dialect mismatch obvious on the first connection attempt:
+
+```
+>>    12B  RFB 003.008\n
+<<    12B  RFB 003.003\n            <-- Screen Sharing speaks 3.3
+>>     2B  01 02                    <-- 3.8-style list, 3.3 expects U32
+... (hang)
+```
+
+Without the protocol tracing the previous session added in `8493ced`,
+this would have taken hours of guessing. Worth noting for future
+debugging: tracing pays for itself.
+
+### What was changed
+
+- **`vncvt/server.py`**: `_handshake` is now version-aware. New helpers
+  `_parse_rfb_minor`, `_negotiate_security`, `_send_security_result`.
+  The minor is clamped to 3 / 7 / 8 per RFC 6143 §6.1.1 (mirroring
+  xrdp's `vnc/vnc.c:negotiate_protocol_version`). 3.3 sends a U32
+  security type, 3.7+ sends a count-prefixed list. 3.3/3.7 skip
+  SecurityResult after `None` auth and skip the failure-reason string;
+  only 3.8 includes it.
+- **`tests/test_vnc_auth.py`**: 3 new tests cover the new code paths
+  (`test_rfb_33_vnc_auth_uses_uint32_security_type`,
+  `test_rfb_33_none_auth_skips_security_result`,
+  `test_rfb_37_failed_auth_omits_reason_string`). The
+  `_handshake_version` helper now takes a `minor` argument; existing
+  3.8 tests still pass unchanged.
+- **`vncvt/renderer.py`**: added `/System/Library/Fonts/SFNSMono.ttf`
+  to `FONT_SEARCH_PATHS` so vncvt starts on macOS without a `--font`
+  arg.
+- **`vncvt/__main__.py`**: `--shell` default now reads `$SHELL` from
+  the environment (falling back to `/bin/bash`), so vncvt picks the
+  user's profile shell instead of always spawning bash.
+- **`tests/conftest.py`**: per-server control-socket path is now under
+  a short `/tmp/vncvt-ctl-XXXX/` directory instead of pytest's
+  `tmp_path` (which on macOS lives under `/var/folders/...` and blows
+  past the 104-byte `sun_path` limit). The directory is rmtree'd on
+  teardown.
+
+### Verification
+
+- `uv run pytest tests/test_vnc_auth.py tests/test_cursor_refresh.py -v`
+  — **all 10 RFB protocol tests pass**, including the 3 new dialect
+  tests and the existing 3.8 regression guards.
+- Manual Screen Sharing.app repro on real Mac: dialect handshake
+  completes, server reaches the auth challenge phase. With the right
+  password typed into the dialog, the connection proceeds through
+  ClientInit/ServerInit and renders the vncvt amber terminal.
+  **Confirmed by the user as working end-to-end.**
+- The post-fix `/tmp/vncvt-local.log` showing the successful 3.3 path:
+  ```
+  >>    12B  52 46 42 20 30 30 33 2e 30 30 38 0a   (RFB 003.008\n)
+  <<    12B  52 46 42 20 30 30 33 2e 30 30 33 0a   (RFB 003.003\n)
+  RFB: negotiated RFB 3.3
+  >>     4B  00 00 00 02                            (U32 SEC_VNC)
+  >>    16B  ...                                    (challenge)
+  <<    16B  ...                                    (response)
+  >>     4B  00 00 00 00                            (SecurityResult OK)
+  ```
+
+### Known issues not addressed this session
+
+1. **6 macOS-rendering tests still error** at fixture setup with
+   "bash prompt did not render within the timeout"
+   (`test_handshake`, `test_padding`, `test_paste`, `test_selection`,
+   `test_apple_pixelfmt::test_bgrx_pixel_format_round_trip`). These
+   were unrunnable on macOS before today's font fix, so they're newly
+   discoverable, not regressions. Likely root cause: macOS bash 3.2
+   prints its "default shell is now zsh" deprecation banner in a way
+   that desynchronises `_wait_for_prompt`'s amber-pixel sniff. The
+   font fix made the *server* startable; the prompt-detection logic
+   in `tests/conftest.py:_wait_for_prompt` may need a longer timeout
+   or a more robust signal on macOS. Worth its own session.
+2. **Calibration corpus** (Step 2 from this morning's plan) — still
+   not built. Now unblocked because Screen Sharing actually connects.
+3. **Linux vncdo job timing race** (described above) — untouched.
+4. **`continue-on-error: true` on the macos-screen-sharing job** —
+   should be removed once the next CI run confirms the macos-latest
+   runner is also happy with the fix, but this session left the
+   workflow file untouched.
+
+### What to commit
+
+The changes above are all uncommitted in the working copy at
+`/Users/kang/claude_home/vncvt/vncvt-claude-vnc-terminal-server-YAmN5`.
+That tree is not a git repo (see `git status` → "not a git
+repository") — the actual checkout lives elsewhere. Whoever picks
+this up: copy the changes into the real `claude/vnc-terminal-server-YAmN5`
+checkout, commit them as one focused commit per file group (server.py
++ tests as one commit; renderer.py font path as another; conftest.py
+socket path as another; `__main__.py` $SHELL default as another), and
+push.
