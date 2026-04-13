@@ -17,18 +17,20 @@ final ``test_failed`` scene automatically.
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
-import socket
 import subprocess
-import tempfile
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import asyncvnc
 import pytest
 import pytest_asyncio
+
+from vncvt.supervisor import (
+    VncvtHandle,
+    start_vncvt,
+    stop_vncvt,
+)
 
 from .scenes import SceneRecorder, trigger_server_dump, capture_client_screenshot
 
@@ -38,111 +40,20 @@ from .scenes import SceneRecorder, trigger_server_dump, capture_client_screensho
 _SCENE_ARCHIVE_ROOT = Path(__file__).parent / "scene-dumps"
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_for_listen(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError:
-            time.sleep(0.05)
-    raise RuntimeError(f"{host}:{port} did not accept connections within {timeout}s")
-
-
-class VncvtHandle:
-    """Per-test handle to a spawned vncvt process with scene dumping."""
-
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        proc: subprocess.Popen,
-        scene_dir: Path,
-        control_socket: Path,
-    ) -> None:
-        self.host = host
-        self.port = port
-        self.proc = proc
-        self.scene_dir = scene_dir
-        self.control_socket = control_socket
-
-    # Allow legacy unpacking: `host, port = vncvt_server`
-    def __iter__(self):
-        yield self.host
-        yield self.port
-
-
 def _spawn_vncvt(
     extra_args: tuple[str, ...], tmp_path: Path,
 ) -> VncvtHandle:
-    """Start a vncvt subprocess with scene dumping flags wired up.
+    """Pytest-side wrapper around vncvt.supervisor.start_vncvt.
 
-    Creates a unique scene dir + control socket under ``tmp_path``,
-    passes them to the server via CLI, waits for the RFB listener
-    to accept, and returns a handle.
+    Kept as a thin shim so the fixtures below can stay focused on
+    test-specific concerns (per-test scene dirs, archival paths)
+    while the supervisor owns the lifecycle details.
     """
-    port = _free_port()
-    scene_dir = tmp_path / "scenes"
-    scene_dir.mkdir(parents=True, exist_ok=True)
-    # Unix socket paths max at 104 bytes on macOS / 108 on Linux. pytest's
-    # tmp_path on macOS lives under /var/folders/... and easily exceeds that,
-    # so put the socket in a short /tmp dir instead. The scene dumps stay
-    # under tmp_path because they don't have the length limit.
-    socket_dir = Path(tempfile.mkdtemp(prefix="vncvt-ctl-", dir="/tmp"))
-    control_socket = socket_dir / "s"
-
-    args = [
-        "uv", "run", "python", "-m", "vncvt",
-        "--port", str(port),
-        "--scene-dump-dir", str(scene_dir),
-        "--scene-control-socket", str(control_socket),
-        *extra_args,
-    ]
-    proc = subprocess.Popen(
-        args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-    )
-    try:
-        _wait_for_listen("127.0.0.1", port)
-        # Also wait for the control socket file to appear.
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if control_socket.exists():
-                break
-            time.sleep(0.05)
-    except Exception:
-        proc.kill()
-        raise
-
-    handle = VncvtHandle(
-        host="127.0.0.1",
-        port=port,
-        proc=proc,
-        scene_dir=scene_dir,
-        control_socket=control_socket,
-    )
-    handle._socket_dir = socket_dir
-    return handle
+    return start_vncvt(*extra_args, scene_root=tmp_path / "scenes")
 
 
 def _teardown_vncvt(handle: VncvtHandle) -> None:
-    handle.proc.terminate()
-    try:
-        handle.proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        handle.proc.kill()
-        handle.proc.wait(timeout=2)
-    socket_dir = getattr(handle, "_socket_dir", None)
-    if socket_dir is not None:
-        shutil.rmtree(socket_dir, ignore_errors=True)
+    stop_vncvt(handle)
 
 
 def _archive_scenes(handle: VncvtHandle, archive_subdir: str) -> None:
