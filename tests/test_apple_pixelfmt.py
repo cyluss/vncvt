@@ -29,6 +29,45 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return buf
 
 
+def _read_full_framebuffer(
+    s: socket.socket, w: int, h: int, mode: str = "BGRX"
+) -> Image.Image:
+    """Send a non-incremental FramebufferUpdateRequest and decode the
+    full Raw-encoded response into a Pillow image, treating each pixel
+    as ``mode`` (the wire format we asked for via SetPixelFormat).
+    """
+    s.send(struct.pack(">BBHHHH", 3, 0, 0, 0, w, h))
+    hdr = _recv_exact(s, 4)
+    assert hdr[0] == 0  # FramebufferUpdate
+    n_rects = struct.unpack(">H", hdr[2:4])[0]
+    img = Image.new("RGB", (w, h), (0, 0, 0))
+    for _ in range(n_rects):
+        rh = _recv_exact(s, 12)
+        rx, ry, rw, rh_val, enc = struct.unpack(">HHHHi", rh)
+        assert enc == 0, f"expected Raw encoding, got {enc}"
+        data = _recv_exact(s, rw * rh_val * 4)
+        # Pillow's raw reader maps the 4 bytes per pixel by mode name.
+        rect_img = Image.frombytes("RGB", (rw, rh_val), data, "raw", mode)
+        img.paste(rect_img, (rx, ry))
+    return img
+
+
+def _brightest_red_in_prompt_band(img: Image.Image) -> int:
+    """Return the maximum red-channel value in the top-of-frame band
+    where bash's first prompt would be drawn. Used as a "is the prompt
+    rendered yet?" signal — amber text has R=255 in the high byte;
+    the background colour is R=26.
+    """
+    best = 0
+    band_h = min(20, img.height)
+    for y in range(band_h):
+        for x in range(min(400, img.width)):
+            r = img.getpixel((x, y))[0]
+            if r > best:
+                best = r
+    return best
+
+
 def test_bgrx_pixel_format_round_trip(vncvt_server):
     host, port = vncvt_server
     s = socket.create_connection((host, port), timeout=5.0)
@@ -46,9 +85,6 @@ def test_bgrx_pixel_format_round_trip(vncvt_server):
         name_len = struct.unpack(">I", server_init[20:24])[0]
         _recv_exact(s, name_len)
 
-        # Give the bash prompt time to render before we screenshot.
-        time.sleep(0.5)
-
         # Send SetPixelFormat (type 0 + 3 pad + 16 byte PixelFormat)
         # with BGRX layout: red-shift=16, green-shift=8, blue-shift=0.
         pf = struct.pack(
@@ -57,33 +93,35 @@ def test_bgrx_pixel_format_round_trip(vncvt_server):
         )
         s.send(bytes([0, 0, 0, 0]) + pf)
 
-        # Non-incremental framebuffer update request.
-        s.send(struct.pack(">BBHHHH", 3, 0, 0, 0, w, h))
-        time.sleep(0.5)
+        # Poll the framebuffer until the bash prompt has actually been
+        # rendered. The previous version of this test used a fixed
+        # 0.5s sleep, which was racy when the spawned shell is a login
+        # shell (it has to source /etc/profile + ~/.profile before
+        # printing its first prompt). Poll up to 5s in 0.1s steps.
+        deadline = time.monotonic() + 5.0
+        img = None
+        while time.monotonic() < deadline:
+            img = _read_full_framebuffer(s, w, h, mode="BGRX")
+            if _brightest_red_in_prompt_band(img) > 200:
+                break
+            time.sleep(0.1)
+        else:
+            assert img is not None
+            raise AssertionError(
+                "bash prompt did not render within 5s "
+                f"(brightest R in prompt band: "
+                f"{_brightest_red_in_prompt_band(img)})"
+            )
 
-        # Read the FramebufferUpdate response.
-        hdr = _recv_exact(s, 4)
-        assert hdr[0] == 0  # FramebufferUpdate
-        n_rects = struct.unpack(">H", hdr[2:4])[0]
-
-        img = Image.new("RGB", (w, h), (0, 0, 0))
-        for _ in range(n_rects):
-            rh = _recv_exact(s, 12)
-            rx, ry, rw, rh_val, enc = struct.unpack(">HHHHi", rh)
-            assert enc == 0, f"expected Raw encoding, got {enc}"
-            data = _recv_exact(s, rw * rh_val * 4)
-            # Interpret as BGRX (what we asked for). Pillow's raw reader
-            # reads the 4 bytes per pixel and maps them by mode name.
-            rect_img = Image.frombytes("RGB", (rw, rh_val), data, "raw", "BGRX")
-            img.paste(rect_img, (rx, ry))
-
-        # Scan the prompt row band for the brightest text pixel. If
-        # the server honored BGRX, we read amber correctly: R dominant,
-        # low B. If it didn't (sent RGBX anyway), R and B would swap
-        # and we'd see blue text.
+        # The poll loop above already proved the prompt is rendered
+        # by checking the red channel. Now check the FULL pixel of
+        # the brightest text cell to verify R dominates B — i.e. the
+        # server actually honored our BGRX request. If it had silently
+        # sent RGBX instead, we'd be reinterpreting the bytes as BGRX
+        # and would see blue (high B, low R) instead of amber.
         best = (0, 0, 0)
-        for y in range(2, 20):
-            for x in range(20, 400):
+        for y in range(min(20, img.height)):
+            for x in range(min(400, img.width)):
                 px = img.getpixel((x, y))
                 if sum(px) > sum(best):
                     best = px

@@ -6,19 +6,33 @@ import imagehash
 import pytest
 from PIL import Image
 
+from vncvt.renderer import TerminalRenderer
+
 from .baselines import assert_hash
+
+
+# Font size the CLI uses by default — see ``vncvt/__main__.py``'s
+# ``--font-size`` argparse default. Kept in sync manually; if the CLI
+# default changes again the assertion below will fail loudly with the
+# expected vs. actual dimensions, pointing straight at this constant.
+_CLI_DEFAULT_FONT_SIZE = 11
 
 
 async def test_connects_and_screenshots(vnc, scene):
     """AsyncVNC client connects to a freshly spawned vncvt and gets
-    a non-empty framebuffer back."""
+    a non-empty framebuffer back, sized to the renderer's output for
+    the CLI's default 80x24 grid at the default font size."""
     rgba = await vnc.screenshot()  # numpy HxWx4
     assert rgba is not None
     h, w, c = rgba.shape
     assert c == 4
-    # Default vncvt framebuffer is 80 cols * 10 px + 2*5 padding = 810
-    # and 24 rows * 19 px + 2*5 padding = 466.
-    assert (w, h) == (810, 466), f"expected 810x466, got {w}x{h}"
+    expected = TerminalRenderer(
+        cols=80, rows=24, font_size=_CLI_DEFAULT_FONT_SIZE
+    )
+    assert (w, h) == (expected.width, expected.height), (
+        f"expected {expected.width}x{expected.height} (renderer at "
+        f"font_size={_CLI_DEFAULT_FONT_SIZE}), got {w}x{h}"
+    )
     await scene("initial_prompt")
 
 
