@@ -85,6 +85,35 @@ def vncdo_driver(host: str, port: int, capture_path: Path) -> Iterator[Path]:
                 proc.kill()
 
 
+def _crop_chrome(src: Path, dst: Path) -> None:
+    """Crop Screen Sharing's title bar + toolbar off the top of a
+    captured window image and write the result to ``dst``.
+
+    Auto-detects the chrome/terminal boundary by scanning rows
+    from the top and finding the first row whose mean luminance
+    drops below a low threshold — the vncvt framebuffer is mostly
+    amber-on-black so any terminal row's mean is well under the
+    chrome's grey mean. Falls back to a hardcoded crop of the top
+    60 pixels if detection produces nothing useful (unexpected
+    Screen Sharing layout).
+    """
+    from PIL import Image
+    import numpy as np
+
+    img = Image.open(src).convert("RGB")
+    arr = np.asarray(img)
+    if arr.ndim != 3 or arr.shape[0] < 10:
+        img.save(dst)
+        return
+    row_means = arr.mean(axis=(1, 2))
+    dark = np.where(row_means < 50)[0]
+    top_crop = int(dark[0]) if len(dark) > 0 else 60
+    # Clamp so we don't crop the entire image away on a weird capture.
+    top_crop = min(top_crop, max(arr.shape[0] - 20, 0))
+    cropped = img.crop((1, top_crop, img.width - 1, img.height - 1))
+    cropped.save(dst)
+
+
 def _osascript(*lines: str) -> str:
     """Run an AppleScript snippet (one statement per arg) and return stdout."""
     cmd = ["osascript"]
@@ -178,22 +207,32 @@ def screen_sharing_driver(
         _osascript('tell application "Screen Sharing" to activate')
         time.sleep(0.3)
         x, y, w, h = _wait_for_screen_sharing_window(timeout=3.0)
-        # Debug aid: also capture the full screen so we can see where
-        # Screen Sharing actually is when the region capture comes up
-        # blank. Lives next to the region capture in the artifact dir.
+        # Debug aid: also capture the full screen alongside the
+        # region capture so we can see where Screen Sharing was if
+        # the region capture later disagrees.
         full_screen = capture_path.with_name("fullscreen.png")
         subprocess.run(
             ["screencapture", "-x", str(full_screen)],
             check=False,
         )
+        raw_window = capture_path.with_name("window-raw.png")
         subprocess.run(
             [
                 "screencapture", "-x",
                 "-R", f"{x},{y},{w},{h}",
-                str(capture_path),
+                str(raw_window),
             ],
             check=True,
         )
+        # Crop Screen Sharing's chrome (title bar + toolbar) off
+        # the top of the window before saving as client.png. The
+        # raster the server rendered does not include the chrome,
+        # so leaving it in would tank both SSIM and the HSV
+        # histogram comparison even though the terminal content
+        # itself matches. The previous shell-based CI job did the
+        # same crop with crop((1, 28, w-1, h-1)) — modern Screen
+        # Sharing has a larger toolbar so we crop more from the top.
+        _crop_chrome(raw_window, capture_path)
         if not capture_path.exists():
             raise RuntimeError(
                 f"screencapture reported success but {capture_path} is missing"
