@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -36,7 +37,10 @@ def main() -> None:
         "--font", default=None, help="Path to a monospace TTF font"
     )
     parser.add_argument(
-        "--shell", default="/bin/bash", help="Shell to run (default: /bin/bash)"
+        "--shell",
+        default=os.environ.get("SHELL") or "/bin/bash",
+        help="Shell to run (default: $SHELL from the user's profile, "
+             "falling back to /bin/bash)",
     )
     parser.add_argument(
         "--password", default=None,
