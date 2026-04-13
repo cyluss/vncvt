@@ -65,15 +65,26 @@ jobs:
           # Screen Sharing.app reads VNC passwords from the user's
           # login keychain (Internet password, protocol "vnc "). Seed
           # one so the connect proceeds without a password dialog.
-          # -T whitelists Screen Sharing for ACL read access; -U
-          # updates a stale entry from a previous CI run on the same
-          # image.
+          #
+          # The Screen Sharing.app bundle path varies by macOS
+          # version (Monterey: /System/Library/CoreServices/Applications/...,
+          # newer: /System/Applications/...). Use mdfind to locate it
+          # at runtime so this works across runner image upgrades.
+          SS_APP=$(mdfind "kMDItemCFBundleIdentifier == com.apple.ScreenSharing" \
+                   2>/dev/null | head -1)
+          echo "Screen Sharing bundle: $SS_APP"
+          if [ -z "$SS_APP" ] || [ ! -d "$SS_APP" ]; then
+            echo "ERROR: could not locate Screen Sharing.app via mdfind" >&2
+            ls /System/Applications/ 2>&1 | grep -i sharing || true
+            ls /System/Library/CoreServices/Applications/ 2>&1 | grep -i sharing || true
+            exit 1
+          fi
           security add-internet-password \
               -s 127.0.0.1 \
               -r "vnc " \
               -a vnc \
               -w testpass \
-              -T "/System/Library/CoreServices/Applications/Screen Sharing.app" \
+              -T "$SS_APP" \
               -U \
               "$HOME/Library/Keychains/login.keychain-db"
 
