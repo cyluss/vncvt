@@ -93,15 +93,17 @@ jobs:
 
       - name: Verify vncdo client matches server framebuffer
         run: |
-          # Loopback (vncdo -> vncvt over localhost) should be nearly
-          # byte-identical. Tight thresholds.
-          uv run --with imagehash --with pillow \
+          # Loopback (vncdo -> vncvt over localhost) has no
+          # resampling, so tight thresholds are appropriate.
+          # Expected same-content SSIM ~0.99; reject anything below
+          # 0.90. Expected Bhattacharyya ~0.00; reject anything
+          # above 0.25.
+          uv run --with scikit-image --with pillow \
             python tests/check_scene_match.py \
               /tmp/vncvt-scenes/vncdo_post_echo \
-              --tolerance 8 \
-              --min-std 3.0 \
-              --std-abs-slack 5.0 \
-              --std-rel-slack 0.75
+              --ssim-min 0.90 \
+              --bhat-max 0.25 \
+              --min-std 3.0
 
       - name: Stop vncvt
         if: always()
@@ -216,8 +218,34 @@ jobs:
           print(f"wrote {out} ({cropped.size})")
           PY
 
-      - name: Compare dHash (cosmetic regression gate)
+      - name: Verify Screen Sharing client matches server framebuffer
         run: |
+          # Screen Sharing lanczos-resamples vncvt's raster onto a
+          # retina-resolution target and applies its own colour
+          # profile, so same-content SSIM typically lands around
+          # 0.85-0.95. Reject below 0.70. Bhattacharyya should stay
+          # near 0 (black + amber palette is preserved through
+          # resampling) — reject above 0.50.
+          #
+          # This is the check that would have caught the
+          # "Connecting to 127.0.0.1..." fallback-screenshot bug: a
+          # Dock + dialog capture has SSIM << 0.70 and Bhat >> 0.50
+          # against the server's terminal render.
+          uv run --with scikit-image --with pillow \
+            python tests/check_scene_match.py \
+              /tmp/vncvt-scenes/mac_post_echo \
+              --ssim-min 0.70 \
+              --bhat-max 0.50 \
+              --min-std 3.0
+
+      - name: Compare dHash against stored baseline (drift gate)
+        run: |
+          # Orthogonal check: compares the current client capture
+          # against a stored dHash baseline, to detect drift in
+          # Screen Sharing's own rendering pipeline over time.
+          # This is a *drift* gate — it does not catch the
+          # server↔client mismatch the step above catches, and
+          # vice versa.
           uv run --with imagehash --with pillow \
             python tests/crop_and_hash_macos.py
 

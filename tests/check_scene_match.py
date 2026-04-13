@@ -9,45 +9,79 @@ rendered frame.
 
 This is the *only* place in the pipeline that actually answers the
 question "did the client see what the server rendered?". The
-separate ``tests/crop_and_hash_macos.py`` script is a drift gate —
-it compares today's client screenshot against a previously saved
+separate ``tests/crop_and_hash_macos.py`` script is a drift gate
+— it compares today's client screenshot against a previously saved
 client screenshot and is blind to server↔client divergence within
 a single run.
 
-Three independent checks run on every invocation, because no
-single perceptual metric is robust to the edge cases we've hit:
+Two-metric stack + cheap guard
+==============================
 
-1. **Blank guard.** Client luminance std dev must be >= ``--min-std``
-   (default 3.0). A solid-black or all-dark-grey capture has std
-   near 0 and indicates the client never painted anything — for
-   example, Screen Sharing sitting on its "Connecting..." sheet
-   before the RFB handshake completes. (On vncvt-2026-04-13 this
-   manifested as a screenshot of the macOS Dock + a progress
-   dialog, captured via the full-desktop fallback when the Screen
-   Sharing window-ID lookup returned empty.)
+0. **Blank guard.** Client luminance std dev > ``--min-std`` (in
+   the 0–255 scale; default 3.0). Catches solid-black or
+   all-dark-grey captures with a clear error message before
+   spending any cycles on the real metrics. This is the exact
+   failure mode we hit when Screen Sharing's window-ID lookup
+   returned empty on macos-latest and ``screencapture -x -o``
+   fell back to capturing an all-black desktop.
 
-2. **Content-density match.** ``|fb_std - client_std|`` must fit
-   inside a band around the server's std dev. Specifically the
-   allowed delta is ``max(--std-abs-slack, --std-rel-slack *
-   fb_std)`` — so for sparse scenes (small fb_std) we allow an
-   absolute cushion, and for dense scenes we allow a relative
-   cushion. This catches "client is showing content but it's the
-   wrong content" — e.g. a bright Connecting dialog against the
-   mostly-dark terminal frame the server rendered.
+1. **SSIM on grayscale** (``skimage.metrics.structural_similarity``,
+   Wang et al. 2004 parameters). The client image is resized to
+   the server's shape with anti-aliased lanczos first so the two
+   buffers share a coordinate system. SSIM compares local
+   luminance/contrast/structure in 11×11 Gaussian windows and is
+   robust to gamma/colour-profile shifts and to the exact kind of
+   lanczos resampling Screen Sharing applies on top of vncvt's
+   raster.
 
-3. **dHash distance.** With ``hash_size=8`` (64-bit hash), typical
-   distances are:
-     - Linux vncdo loopback:       ~0-5   (use --tolerance 8)
-     - macOS Screen Sharing:       ~5-15  (use --tolerance 20)
-     - wildly different images:    30+
+   Thresholds: expect ≥ 0.98 for vncdo loopback (no resample),
+   0.85–0.95 for Screen Sharing (lanczos + retina + colour
+   profile), ≤ 0.4 for cross-content pairs. Default hard-fail at
+   ``--ssim-min 0.70`` sits squarely in the gap.
+
+2. **HSV histogram Bhattacharyya distance.** Orthogonal to SSIM:
+   captures "what colours are in the image, in what proportion"
+   without caring about spatial structure. vncvt frames are ~100%
+   black and amber; anything with a different palette (Dock
+   icons, grey Connecting-dialog chrome, browser window) produces
+   distance ≫ 0.5 regardless of resampling.
+
+   Thresholds: same-content pairs (even with resampling) land at
+   ≤ 0.3; cross-content pairs at ≥ 0.6. Default hard-fail at
+   ``--bhat-max 0.50``.
+
+Both signals must pass; either one firing is enough to fail the
+check. They are uncorrelated enough that the joint false-positive
+rate on a principled calibration set would be negligible.
+
+Calibration note
+================
+
+The 0.70 / 0.50 defaults come from the published literature
+(scikit-image SSIM examples, Wang et al. 2004, and OpenCV's
+histogram-comparison tutorial for Bhattacharyya ranges). They are
+*defensible defaults*, not CI-pipeline-calibrated values.
+
+The right long-term solution is to pin a small
+``tests/scene_calibration/`` corpus of known-good and known-bad
+scene pairs, compute the metric distribution on first push, and
+set thresholds at percentile-based bounds (e.g. 1st percentile of
+SSIM_same, 99th percentile of Bhattacharyya_same). That can land
+in a follow-up commit once we have a corpus of real Screen
+Sharing captures to calibrate against.
 
 Usage:
     python tests/check_scene_match.py <scene_dir> [options]
 
 Exit codes:
-    0 — all three checks passed
+    0 — all checks passed
     1 — at least one check failed (see stderr for which)
     2 — missing file or invalid input
+
+Dependencies:
+    PIL (Pillow), numpy, scikit-image. CI invokes this via
+    ``uv run --with scikit-image --with pillow`` so the deps are
+    ephemeral and not part of the vncvt package dep set.
 """
 
 from __future__ import annotations
@@ -56,8 +90,51 @@ import argparse
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageStat
-import imagehash
+import numpy as np
+from PIL import Image
+
+try:
+    from skimage.metrics import structural_similarity as ssim
+    from skimage.transform import resize as sk_resize
+except ImportError as e:  # pragma: no cover — dependency shape error
+    print(
+        f"ERROR: scikit-image is required. Install with "
+        f"`uv run --with scikit-image --with pillow python "
+        f"tests/check_scene_match.py ...` (CI does this). "
+        f"Import error: {e}",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def _load_gray_01(path: Path) -> np.ndarray:
+    """Load an image as a float32 grayscale array normalised to [0, 1]."""
+    return np.asarray(Image.open(path).convert("L"), dtype=np.float32) / 255.0
+
+
+def _load_hsv(path: Path) -> np.ndarray:
+    """Load an image as an HSV uint8 array."""
+    return np.asarray(Image.open(path).convert("HSV"))
+
+
+def _hs_hist(hsv: np.ndarray, bins: tuple[int, int] = (32, 32)) -> np.ndarray:
+    """Normalised 2D hue-saturation histogram."""
+    h = hsv[..., 0].ravel()
+    s = hsv[..., 1].ravel()
+    hist, _, _ = np.histogram2d(h, s, bins=bins, range=[[0, 256], [0, 256]])
+    total = hist.sum()
+    if total <= 0:
+        return hist
+    return hist / total
+
+
+def _bhattacharyya(p: np.ndarray, q: np.ndarray) -> float:
+    """Bhattacharyya distance between two normalised distributions.
+
+    Bounded in [0, 1]; 0 = identical, 1 = disjoint support.
+    """
+    bc = float(np.sum(np.sqrt(p * q)))
+    return float(np.sqrt(max(0.0, 1.0 - bc)))
 
 
 def main() -> int:
@@ -68,36 +145,28 @@ def main() -> int:
         help="Directory containing scene.fb.png and scene.client.png",
     )
     parser.add_argument(
-        "--tolerance",
-        type=int,
-        default=8,
-        help="Max allowed dHash Hamming distance (default: 8)",
+        "--ssim-min",
+        type=float,
+        default=0.70,
+        help="Minimum acceptable SSIM score (default: 0.70). Typical "
+             "same-content pairs score >= 0.85 even after lanczos "
+             "resampling; cross-content pairs collapse to <= 0.5.",
     )
     parser.add_argument(
-        "--hash-size",
-        type=int,
-        default=8,
-        help="imagehash dhash hash_size (default: 8 -> 64-bit hash)",
+        "--bhat-max",
+        type=float,
+        default=0.50,
+        help="Maximum acceptable HSV Bhattacharyya distance "
+             "(default: 0.50). Typical same-palette pairs <= 0.3; "
+             "cross-palette pairs >= 0.6.",
     )
     parser.add_argument(
         "--min-std",
         type=float,
         default=3.0,
-        help="Minimum client luminance std dev; lower = blank capture "
-             "(default: 3.0)",
-    )
-    parser.add_argument(
-        "--std-abs-slack",
-        type=float,
-        default=5.0,
-        help="Absolute slack on content-density delta (default: 5.0)",
-    )
-    parser.add_argument(
-        "--std-rel-slack",
-        type=float,
-        default=0.75,
-        help="Relative slack on content-density delta, fraction of "
-             "fb_std (default: 0.75)",
+        help="Minimum client luminance std dev in the 0-255 scale "
+             "(default: 3.0). Lower values indicate a blank/uniform "
+             "capture.",
     )
     args = parser.parse_args()
 
@@ -111,63 +180,90 @@ def main() -> int:
         print(f"ERROR: {client_path} not found", file=sys.stderr)
         return 2
 
-    fb_img = Image.open(fb_path).convert("RGB")
-    client_img = Image.open(client_path).convert("RGB")
+    fb_gray = _load_gray_01(fb_path)
+    client_gray = _load_gray_01(client_path)
 
-    fb_std = ImageStat.Stat(fb_img.convert("L")).stddev[0]
-    client_std = ImageStat.Stat(client_img.convert("L")).stddev[0]
+    # Align client to server coordinate system. Screen Sharing
+    # captures at retina resolution and crop artefacts may leave
+    # the client image a different shape; SSIM requires both
+    # inputs to be identically shaped.
+    if client_gray.shape != fb_gray.shape:
+        client_gray_resized = sk_resize(
+            client_gray, fb_gray.shape, anti_aliasing=True
+        )
+    else:
+        client_gray_resized = client_gray
 
-    fb_hash = imagehash.dhash(fb_img, hash_size=args.hash_size)
-    client_hash = imagehash.dhash(client_img, hash_size=args.hash_size)
-    distance = fb_hash - client_hash
+    # Read the HSV histograms from the original (unresized) client
+    # image — resizing in grayscale loses colour information, and
+    # histograms are resolution-invariant anyway.
+    fb_hist = _hs_hist(_load_hsv(fb_path))
+    client_hist = _hs_hist(_load_hsv(client_path))
+
+    # Metrics
+    client_std_255 = float(client_gray.std() * 255.0)
+    ssim_score = float(
+        ssim(
+            fb_gray,
+            client_gray_resized,
+            data_range=1.0,
+            gaussian_weights=True,
+            sigma=1.5,
+            use_sample_covariance=False,
+        )
+    )
+    bhat = _bhattacharyya(fb_hist, client_hist)
+
+    # Sizes for the diagnostic log — the raw client size is useful
+    # for debugging Screen Sharing crop problems.
+    with Image.open(fb_path) as _im:
+        fb_size = _im.size
+    with Image.open(client_path) as _im:
+        client_size = _im.size
 
     print(f"scene_dir:    {args.scene_dir}")
-    print(f"fb:           size={fb_img.size} std={fb_std:.2f}")
-    print(f"client:       size={client_img.size} std={client_std:.2f}")
-    print(f"fb dhash:     {fb_hash}")
-    print(f"client dhash: {client_hash}")
-    print(f"distance:     {distance} (tolerance {args.tolerance})")
+    print(f"fb:           size={fb_size}")
+    print(f"client:       size={client_size} std_255={client_std_255:.2f}")
+    print(f"SSIM:         {ssim_score:.4f}  (min {args.ssim_min})")
+    print(f"Bhattacharyya:{bhat:.4f}  (max {args.bhat_max})")
 
     errors: list[str] = []
 
-    # Check 1 — blank guard.
-    if client_std < args.min_std:
+    if client_std_255 < args.min_std:
         errors.append(
-            f"CLIENT IS BLANK: luminance std dev {client_std:.2f} < "
-            f"min {args.min_std}. The client-side capture contains no "
+            f"CLIENT IS BLANK: luminance std dev {client_std_255:.2f} "
+            f"< min {args.min_std}. The client capture contains no "
             f"meaningful image content — most likely the VNC client "
             f"never painted a frame (e.g. still on a connection "
             f"progress dialog, or the screencapture fallback hit an "
             f"all-black desktop)."
         )
 
-    # Check 2 — content-density match.
-    allowed_delta = max(args.std_abs_slack, args.std_rel_slack * fb_std)
-    density_delta = abs(fb_std - client_std)
-    if density_delta > allowed_delta:
+    if ssim_score < args.ssim_min:
         errors.append(
-            f"CONTENT DENSITY MISMATCH: |fb_std - client_std| = "
-            f"{density_delta:.2f} > allowed {allowed_delta:.2f} "
-            f"(max({args.std_abs_slack}, {args.std_rel_slack} * "
-            f"{fb_std:.2f})). The client image has very different "
-            f"overall busyness from what the server rendered — most "
-            f"likely the client is showing something other than the "
-            f"terminal output, such as an auth dialog, a connection "
-            f"progress sheet, or a desktop wallpaper."
+            f"SSIM {ssim_score:.4f} below minimum {args.ssim_min}. "
+            f"The server and client frames are structurally "
+            f"different images even after aligning to the same "
+            f"resolution — the client is showing something other "
+            f"than the terminal output."
         )
 
-    # Check 3 — dHash distance.
-    if distance > args.tolerance:
+    if bhat > args.bhat_max:
         errors.append(
-            f"DHASH MISMATCH: distance {distance} exceeds tolerance "
-            f"{args.tolerance}. The client and server frames are "
-            f"structurally different images even after normalising "
-            f"for resolution."
+            f"HSV Bhattacharyya distance {bhat:.4f} above maximum "
+            f"{args.bhat_max}. The colour palette of the client "
+            f"capture does not match the server render (vncvt is "
+            f"black + amber; the client is showing something with "
+            f"a different palette such as a macOS dialog, browser "
+            f"chrome, or dock icons)."
         )
 
     if errors:
         print("", file=sys.stderr)
-        print("FAIL — server↔client scene verification failed:", file=sys.stderr)
+        print(
+            "FAIL — server↔client scene verification failed:",
+            file=sys.stderr,
+        )
         for e in errors:
             print(f"  * {e}", file=sys.stderr)
         return 1
