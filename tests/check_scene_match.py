@@ -93,18 +93,22 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-try:
-    from skimage.metrics import structural_similarity as ssim
-    from skimage.transform import resize as sk_resize
-except ImportError as e:  # pragma: no cover — dependency shape error
-    print(
-        f"ERROR: scikit-image is required. Install with "
-        f"`uv run --with scikit-image --with pillow python "
-        f"tests/check_scene_match.py ...` (CI does this). "
-        f"Import error: {e}",
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
+
+def _import_skimage():
+    """Lazy-import scikit-image so this module can be imported even
+    when scikit-image isn't installed (e.g. in the unit-suite job
+    that doesn't run scene checks). The verify_scene call site is
+    the only place that actually needs skimage."""
+    try:
+        from skimage.metrics import structural_similarity as ssim
+        from skimage.transform import resize as sk_resize
+    except ImportError as e:  # pragma: no cover — dependency shape error
+        raise RuntimeError(
+            "scikit-image is required for scene verification. Install "
+            "with `uv sync --all-groups` or `uv run --with scikit-image "
+            "--with pillow ...`. Original error: " + str(e)
+        ) from e
+    return ssim, sk_resize
 
 
 def _load_gray_01(path: Path) -> np.ndarray:
@@ -137,56 +141,45 @@ def _bhattacharyya(p: np.ndarray, q: np.ndarray) -> float:
     return float(np.sqrt(max(0.0, 1.0 - bc)))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument(
-        "scene_dir",
-        type=Path,
-        help="Directory containing scene.fb.png and scene.client.png",
-    )
-    parser.add_argument(
-        "--ssim-min",
-        type=float,
-        default=0.70,
-        help="Minimum acceptable SSIM score (default: 0.70). Typical "
-             "same-content pairs score >= 0.85 even after lanczos "
-             "resampling; cross-content pairs collapse to <= 0.5.",
-    )
-    parser.add_argument(
-        "--bhat-max",
-        type=float,
-        default=0.50,
-        help="Maximum acceptable HSV Bhattacharyya distance "
-             "(default: 0.50). Typical same-palette pairs <= 0.3; "
-             "cross-palette pairs >= 0.6.",
-    )
-    parser.add_argument(
-        "--min-std",
-        type=float,
-        default=3.0,
-        help="Minimum client luminance std dev in the 0-255 scale "
-             "(default: 3.0). Lower values indicate a blank/uniform "
-             "capture.",
-    )
-    args = parser.parse_args()
+class SceneMismatch(AssertionError):
+    """Raised by ``verify_scene`` when at least one metric fails.
 
-    fb_path = args.scene_dir / "scene.fb.png"
-    client_path = args.scene_dir / "scene.client.png"
+    Carries the full metric dict on ``.metrics`` for callers (e.g. a
+    pytest test) that want to log the values even though the
+    assertion message already includes them.
+    """
+
+    def __init__(self, message: str, metrics: dict) -> None:
+        super().__init__(message)
+        self.metrics = metrics
+
+
+def verify_scene(
+    scene_dir: Path,
+    *,
+    ssim_min: float = 0.70,
+    bhat_max: float = 0.50,
+    min_std: float = 3.0,
+) -> dict:
+    """Verify a scene bundle and return its metric dict on success.
+
+    Raises ``FileNotFoundError`` if either of the required PNGs is
+    missing, and ``SceneMismatch`` if any metric is out of bounds.
+    The returned dict is the same one printed by ``main()``.
+    """
+    fb_path = scene_dir / "scene.fb.png"
+    client_path = scene_dir / "scene.client.png"
 
     if not fb_path.exists():
-        print(f"ERROR: {fb_path} not found", file=sys.stderr)
-        return 2
+        raise FileNotFoundError(f"{fb_path} not found")
     if not client_path.exists():
-        print(f"ERROR: {client_path} not found", file=sys.stderr)
-        return 2
+        raise FileNotFoundError(f"{client_path} not found")
+
+    ssim, sk_resize = _import_skimage()
 
     fb_gray = _load_gray_01(fb_path)
     client_gray = _load_gray_01(client_path)
 
-    # Align client to server coordinate system. Screen Sharing
-    # captures at retina resolution and crop artefacts may leave
-    # the client image a different shape; SSIM requires both
-    # inputs to be identically shaped.
     if client_gray.shape != fb_gray.shape:
         client_gray_resized = sk_resize(
             client_gray, fb_gray.shape, anti_aliasing=True
@@ -194,13 +187,9 @@ def main() -> int:
     else:
         client_gray_resized = client_gray
 
-    # Read the HSV histograms from the original (unresized) client
-    # image — resizing in grayscale loses colour information, and
-    # histograms are resolution-invariant anyway.
     fb_hist = _hs_hist(_load_hsv(fb_path))
     client_hist = _hs_hist(_load_hsv(client_path))
 
-    # Metrics
     client_std_255 = float(client_gray.std() * 255.0)
     ssim_score = float(
         ssim(
@@ -214,60 +203,106 @@ def main() -> int:
     )
     bhat = _bhattacharyya(fb_hist, client_hist)
 
-    # Sizes for the diagnostic log — the raw client size is useful
-    # for debugging Screen Sharing crop problems.
     with Image.open(fb_path) as _im:
         fb_size = _im.size
     with Image.open(client_path) as _im:
         client_size = _im.size
 
-    print(f"scene_dir:    {args.scene_dir}")
-    print(f"fb:           size={fb_size}")
-    print(f"client:       size={client_size} std_255={client_std_255:.2f}")
-    print(f"SSIM:         {ssim_score:.4f}  (min {args.ssim_min})")
-    print(f"Bhattacharyya:{bhat:.4f}  (max {args.bhat_max})")
+    metrics = {
+        "scene_dir": str(scene_dir),
+        "fb_size": fb_size,
+        "client_size": client_size,
+        "client_std_255": client_std_255,
+        "ssim": ssim_score,
+        "bhat": bhat,
+        "ssim_min": ssim_min,
+        "bhat_max": bhat_max,
+        "min_std": min_std,
+    }
 
     errors: list[str] = []
-
-    if client_std_255 < args.min_std:
+    if client_std_255 < min_std:
         errors.append(
             f"CLIENT IS BLANK: luminance std dev {client_std_255:.2f} "
-            f"< min {args.min_std}. The client capture contains no "
+            f"< min {min_std}. The client capture contains no "
             f"meaningful image content — most likely the VNC client "
             f"never painted a frame (e.g. still on a connection "
             f"progress dialog, or the screencapture fallback hit an "
             f"all-black desktop)."
         )
-
-    if ssim_score < args.ssim_min:
+    if ssim_score < ssim_min:
         errors.append(
-            f"SSIM {ssim_score:.4f} below minimum {args.ssim_min}. "
+            f"SSIM {ssim_score:.4f} below minimum {ssim_min}. "
             f"The server and client frames are structurally "
             f"different images even after aligning to the same "
             f"resolution — the client is showing something other "
             f"than the terminal output."
         )
-
-    if bhat > args.bhat_max:
+    if bhat > bhat_max:
         errors.append(
             f"HSV Bhattacharyya distance {bhat:.4f} above maximum "
-            f"{args.bhat_max}. The colour palette of the client "
-            f"capture does not match the server render (vncvt is "
-            f"black + amber; the client is showing something with "
-            f"a different palette such as a macOS dialog, browser "
-            f"chrome, or dock icons)."
+            f"{bhat_max}. The colour palette of the client capture "
+            f"does not match the server render (vncvt is black + "
+            f"amber; the client is showing something with a different "
+            f"palette such as a macOS dialog, browser chrome, or dock "
+            f"icons)."
         )
 
     if errors:
-        print("", file=sys.stderr)
-        print(
-            "FAIL — server↔client scene verification failed:",
-            file=sys.stderr,
+        raise SceneMismatch(
+            "server↔client scene verification failed:\n  * "
+            + "\n  * ".join(errors),
+            metrics,
         )
-        for e in errors:
-            print(f"  * {e}", file=sys.stderr)
+    return metrics
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument(
+        "scene_dir",
+        type=Path,
+        help="Directory containing scene.fb.png and scene.client.png",
+    )
+    parser.add_argument("--ssim-min", type=float, default=0.70)
+    parser.add_argument("--bhat-max", type=float, default=0.50)
+    parser.add_argument("--min-std", type=float, default=3.0)
+    args = parser.parse_args()
+
+    try:
+        metrics = verify_scene(
+            args.scene_dir,
+            ssim_min=args.ssim_min,
+            bhat_max=args.bhat_max,
+            min_std=args.min_std,
+        )
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    except SceneMismatch as e:
+        m = e.metrics
+        print(f"scene_dir:    {m['scene_dir']}")
+        print(f"fb:           size={m['fb_size']}")
+        print(
+            f"client:       size={m['client_size']} "
+            f"std_255={m['client_std_255']:.2f}"
+        )
+        print(f"SSIM:         {m['ssim']:.4f}  (min {m['ssim_min']})")
+        print(f"Bhattacharyya:{m['bhat']:.4f}  (max {m['bhat_max']})")
+        print("", file=sys.stderr)
+        print(f"FAIL — {e}", file=sys.stderr)
         return 1
 
+    print(f"scene_dir:    {metrics['scene_dir']}")
+    print(f"fb:           size={metrics['fb_size']}")
+    print(
+        f"client:       size={metrics['client_size']} "
+        f"std_255={metrics['client_std_255']:.2f}"
+    )
+    print(f"SSIM:         {metrics['ssim']:.4f}  (min {metrics['ssim_min']})")
+    print(
+        f"Bhattacharyya:{metrics['bhat']:.4f}  (max {metrics['bhat_max']})"
+    )
     print("PASS: server and client scene frames agree")
     return 0
 
