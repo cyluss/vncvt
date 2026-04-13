@@ -241,7 +241,7 @@ def _err(msg: str) -> bytes:
     ).encode("utf-8")
 
 
-def _ok(scene_dir: Path) -> bytes:
+def _ok_dump(scene_dir: Path) -> bytes:
     return (
         json.dumps(
             {
@@ -254,23 +254,46 @@ def _ok(scene_dir: Path) -> bytes:
     ).encode("utf-8")
 
 
+def _ok_resize(cols: int, rows: int) -> bytes:
+    return (
+        json.dumps(
+            {
+                "version": PROTOCOL_VERSION,
+                "ok": True,
+                "cols": cols,
+                "rows": rows,
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 async def serve_control_socket(
     dumper: SceneDumper,
     socket_path: Path,
+    rfb_server: "RFBServer | None" = None,
 ) -> asyncio.base_events.Server:
-    """Start an asyncio Unix-domain-socket server that triggers dumps.
+    """Start an asyncio Unix-domain-socket server that handles control ops.
 
-    Protocol is one JSON document per line. Request::
+    Protocol is one JSON document per line. Supported request shapes::
 
         {"version": 1, "op": "dump", "name": "<scene_name>"}
+        {"version": 1, "op": "resize", "cols": <int>, "rows": <int>}
 
-    Response (success)::
+    Successful dump response::
 
         {"version": 1, "ok": true, "scene_dir": "<absolute path>"}
 
-    Response (failure)::
+    Successful resize response (echoes the actual cell-snapped values)::
+
+        {"version": 1, "ok": true, "cols": <int>, "rows": <int>}
+
+    Failure response::
 
         {"version": 1, "ok": false, "error": "<reason>"}
+
+    The ``server`` argument is required when the caller wants to handle
+    ``op="resize"``. Passing None still works for dump-only setups.
 
     Returns the started ``asyncio.Server``. Caller is responsible for
     serving it (via ``asyncio.create_task(server.serve_forever())``)
@@ -311,26 +334,59 @@ async def serve_control_socket(
                 return
 
             op = request.get("op")
-            if op != "dump":
-                writer.write(_err(f"unknown op {op!r}; expected 'dump'"))
+            if op == "dump":
+                name = request.get("name")
+                if not isinstance(name, str) or not name:
+                    writer.write(_err("'name' must be a non-empty string"))
+                    await writer.drain()
+                    return
+                try:
+                    scene_dir = dumper.dump(name)
+                except Exception as e:
+                    writer.write(_err(str(e)))
+                    await writer.drain()
+                    return
+                writer.write(_ok_dump(scene_dir))
+                await writer.drain()
+            elif op == "resize":
+                if rfb_server is None:
+                    writer.write(_err(
+                        "resize requires the control socket to be wired "
+                        "to an RFBServer instance"
+                    ))
+                    await writer.drain()
+                    return
+                cols = request.get("cols")
+                rows = request.get("rows")
+                if not isinstance(cols, int) or not isinstance(rows, int):
+                    writer.write(_err(
+                        "'cols' and 'rows' must be integers"
+                    ))
+                    await writer.drain()
+                    return
+                if cols < 1 or rows < 1 or cols > 1000 or rows > 1000:
+                    writer.write(_err(
+                        f"cols/rows out of range (1..1000); got "
+                        f"cols={cols}, rows={rows}"
+                    ))
+                    await writer.drain()
+                    return
+                try:
+                    actual_cols, actual_rows = await rfb_server.handle_resize(
+                        cols, rows
+                    )
+                except Exception as e:
+                    writer.write(_err(f"resize failed: {e}"))
+                    await writer.drain()
+                    return
+                writer.write(_ok_resize(actual_cols, actual_rows))
+                await writer.drain()
+            else:
+                writer.write(_err(
+                    f"unknown op {op!r}; expected 'dump' or 'resize'"
+                ))
                 await writer.drain()
                 return
-
-            name = request.get("name")
-            if not isinstance(name, str) or not name:
-                writer.write(_err("'name' must be a non-empty string"))
-                await writer.drain()
-                return
-
-            try:
-                scene_dir = dumper.dump(name)
-            except Exception as e:
-                writer.write(_err(str(e)))
-                await writer.drain()
-                return
-
-            writer.write(_ok(scene_dir))
-            await writer.drain()
         finally:
             writer.close()
             try:

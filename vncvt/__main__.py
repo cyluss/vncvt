@@ -31,7 +31,7 @@ def main() -> None:
         "--rows", type=int, default=24, help="Terminal rows (default: 24)"
     )
     parser.add_argument(
-        "--font-size", type=int, default=16, help="Font size in points (default: 16)"
+        "--font-size", type=int, default=11, help="Font size in points (default: 11)"
     )
     parser.add_argument(
         "--font", default=None, help="Path to a monospace TTF font"
@@ -102,7 +102,11 @@ def main() -> None:
             out_dir=Path(args.scene_dump_dir),
         )
         scene_control_server = loop.run_until_complete(
-            serve_control_socket(dumper, Path(args.scene_control_socket))
+            serve_control_socket(
+                dumper,
+                Path(args.scene_control_socket),
+                rfb_server=server,
+            )
         )
         loop.create_task(scene_control_server.serve_forever())
 

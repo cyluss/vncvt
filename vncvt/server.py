@@ -219,6 +219,10 @@ class RFBServer:
         self.log_traffic = log_traffic
         self.clients: list[RFBClient] = []
         self._running = False
+        # Serializes resizes against the render+send pass in
+        # _update_loop so a client can't read pixel data from a
+        # half-reallocated framebuffer mid-FBU.
+        self._resize_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the VNC server, PTY reader, and update loop."""
@@ -252,31 +256,62 @@ class RFBServer:
         while self._running:
             await asyncio.sleep(1 / 30)  # ~30 fps cap
 
-            dirty = self.terminal.get_dirty_rows()
-            if not dirty and not self.clients:
-                continue
+            # Hold the resize lock across the whole render+send pass so
+            # a concurrent handle_resize cannot reallocate the framebuffer
+            # mid-flight. The lock is uncontended in steady state.
+            async with self._resize_lock:
+                dirty = self.terminal.get_dirty_rows()
+                if not dirty and not self.clients:
+                    continue
 
-            selection = self.terminal.selection_normalized()
-            rects = []
-            if dirty:
-                rects = self.renderer.render_dirty(
-                    self.terminal.screen, dirty, selection=selection
-                )
+                selection = self.terminal.selection_normalized()
+                rects = []
+                if dirty:
+                    rects = self.renderer.render_dirty(
+                        self.terminal.screen, dirty, selection=selection
+                    )
 
-            # Always update cursor position
-            cursor_rect = self.renderer.render_cursor(self.terminal.screen)
-            if cursor_rect:
-                rects.append(cursor_rect)
+                # Always update cursor position
+                cursor_rect = self.renderer.render_cursor(self.terminal.screen)
+                if cursor_rect:
+                    rects.append(cursor_rect)
 
-            if not rects:
-                continue
+                if not rects:
+                    continue
 
+                for client in list(self.clients):
+                    if client.update_requested:
+                        try:
+                            await client.send_framebuffer_update(rects)
+                        except (ConnectionError, OSError):
+                            self.clients.remove(client)
+
+    async def handle_resize(self, cols: int, rows: int) -> tuple[int, int]:
+        """Resize the shared terminal + renderer and notify all
+        connected clients. Returns the actual ``(cols, rows)`` after
+        clamping. Safe to call from any coroutine — the lock keeps it
+        from racing with the render loop."""
+        async with self._resize_lock:
+            cols = max(1, cols)
+            rows = max(1, rows)
+            self.terminal.resize(cols, rows)
+            self.renderer.resize(cols, rows)
+            # Render the whole new framebuffer once so subsequent FBUs
+            # have valid pixel data to read.
+            all_rows = set(range(rows))
+            self.renderer.render_dirty(self.terminal.screen, all_rows)
+            self.terminal.screen.dirty.clear()
+
+            new_w = self.renderer.width
+            new_h = self.renderer.height
             for client in list(self.clients):
-                if client.update_requested:
-                    try:
-                        await client.send_framebuffer_update(rects)
-                    except (ConnectionError, OSError):
+                try:
+                    await client.notify_resize(new_w, new_h)
+                except (ConnectionError, OSError) as e:
+                    log.info("client dropped during resize broadcast: %s", e)
+                    if client in self.clients:
                         self.clients.remove(client)
+            return cols, rows
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -586,27 +621,28 @@ class RFBClient:
                 for _ in range(num_screens):
                     await self.reader.readexactly(16)
 
-                if -223 in self.encodings:
-                    renderer = self.server.renderer
-                    pad = renderer.padding
-                    new_cols = max(1, (req_w - 2 * pad) // renderer.cell_width)
-                    new_rows = max(1, (req_h - 2 * pad) // renderer.cell_height)
-                    # Snap to cell grid (plus padding on each side)
-                    actual_w = new_cols * renderer.cell_width + 2 * pad
-                    actual_h = new_rows * renderer.cell_height + 2 * pad
-                    self.server.terminal.resize(new_cols, new_rows)
-                    renderer.resize(new_cols, new_rows)
-                    log.info(
-                        "Resize: %dx%d -> %dx%d cols/rows, %dx%d px",
-                        req_w, req_h, new_cols, new_rows, actual_w, actual_h,
+                # Per RFB community wiki §SetDesktopSize: a client that
+                # sends msg 251 must advertise pseudo-encoding -308
+                # (ExtendedDesktopSize). -223 (DesktopSize) is the
+                # legacy server→client notification only; clients that
+                # only support -223 cannot resize.
+                if -308 not in self.encodings:
+                    log.warning(
+                        "RFB: client sent SetDesktopSize without "
+                        "advertising ExtendedDesktopSize (-308); ignoring"
                     )
-                    await self._send_desktop_size(actual_w, actual_h, status=0)
-                    # Send full framebuffer at new size
-                    fb = renderer.full_render(
-                        self.server.terminal.screen,
-                        selection=self.server.terminal.selection_normalized(),
-                    )
-                    await self._send_full_update(fb)
+                    continue
+
+                renderer = self.server.renderer
+                pad = renderer.padding
+                new_cols = max(1, (req_w - 2 * pad) // renderer.cell_width)
+                new_rows = max(1, (req_h - 2 * pad) // renderer.cell_height)
+                log.info(
+                    "RFB: client resize request %dx%d px -> %dx%d cells",
+                    req_w, req_h, new_cols, new_rows,
+                )
+                # Centralised handler does the lock + multi-client broadcast.
+                await self.server.handle_resize(new_cols, new_rows)
 
             else:
                 # Unknown message types are a protocol error from our
@@ -623,6 +659,25 @@ class RFBClient:
                 raise ConnectionError(
                     f"unknown RFB message type {msg_type}"
                 )
+
+    async def notify_resize(self, width: int, height: int) -> None:
+        """Tell this client the framebuffer is now ``width x height`` and
+        push a full repaint at the new size.
+
+        Clients that advertised neither -223 (DesktopSize) nor -308
+        (ExtendedDesktopSize) have no way to receive the size change,
+        so we disconnect them rather than leave them desynced — the
+        same fail-loud principle as the RFB dialect fix.
+        """
+        if -223 not in self.encodings and -308 not in self.encodings:
+            raise ConnectionError(
+                "client does not support resize notification "
+                "(neither DesktopSize nor ExtendedDesktopSize advertised)"
+            )
+        await self._send_desktop_size(width, height, status=0)
+        # The server has already rendered the full framebuffer at the
+        # new dimensions before broadcasting; just push it.
+        await self._send_full_update(self.server.renderer.image)
 
     async def _send_desktop_size(self, width: int, height: int, status: int = 0) -> None:
         """Send ExtendedDesktopSize pseudo-encoding to confirm resize."""
