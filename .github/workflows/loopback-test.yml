@@ -21,6 +21,14 @@ jobs:
       - name: Run pytest suite
         run: uv run pytest tests/ -v
 
+      - name: Upload scene dumps (pytest)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scene-dumps-linux-pytest
+          path: tests/scene-dumps/
+          if-no-files-found: ignore
+
       - name: Upload baselines
         if: always()
         uses: actions/upload-artifact@v4
@@ -40,19 +48,36 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Start vncvt and drive with vncdo
+      - name: Start vncvt with scene-dump control socket
         run: |
-          uv run python -m vncvt --port 5995 &
-          SERVER_PID=$!
-          sleep 2
-          # vncdotool is a PyPI-only package (no apt package exists).
-          # `uv run --with` pulls it into an ephemeral environment for
-          # this one invocation, avoiding any dev-group pollution.
+          rm -f /tmp/vncvt-scene.sock
+          mkdir -p /tmp/vncvt-scenes
+          uv run python -m vncvt --port 5995 \
+               --scene-dump-dir /tmp/vncvt-scenes \
+               --scene-control-socket /tmp/vncvt-scene.sock &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+          # Wait for both the RFB port and the control socket.
+          for _ in $(seq 1 20); do
+            if [ -S /tmp/vncvt-scene.sock ] && \
+               (echo > /dev/tcp/127.0.0.1/5995) 2>/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+
+      - name: Drive vncdo and capture scene bundle
+        run: |
+          # vncdotool is PyPI-only; uv run --with pulls it ephemerally.
           uv run --with vncdotool vncdo -s 127.0.0.1::5995 \
                  type "echo vncdo_works_on_linux" key enter \
                  capture /tmp/vncdo_cross.png
-          kill "$SERVER_PID" 2>/dev/null || true
           test -f /tmp/vncdo_cross.png
+
+          # Trigger the server-side 4-file dump and then copy the vncdo
+          # PNG in as the client-side artifact to complete the bundle.
+          printf 'DUMP vncdo_post_echo\n' | nc -U -N -w 3 /tmp/vncvt-scene.sock
+          cp /tmp/vncdo_cross.png /tmp/vncvt-scenes/vncdo_post_echo/scene.client.png
+
           uv run python -c "
           from PIL import Image
           img = Image.open('/tmp/vncdo_cross.png')
@@ -60,12 +85,16 @@ jobs:
           print('cross-check image size:', img.size)
           "
 
-      - name: Upload vncdo screenshot
+      - name: Stop vncvt
+        if: always()
+        run: kill "$SERVER_PID" 2>/dev/null || true
+
+      - name: Upload scene dumps (vncdo)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vncdo-cross-check
-          path: /tmp/vncdo_cross.png
+          name: scene-dumps-linux-vncdo
+          path: /tmp/vncvt-scenes/
           if-no-files-found: ignore
 
   macos-screen-sharing:
@@ -80,11 +109,18 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Start vncvt with VNC auth
+      - name: Start vncvt with VNC auth + scene-dump control socket
         run: |
-          uv run python -m vncvt --port 5900 --password testpass &
+          rm -f /tmp/vncvt-scene.sock
+          mkdir -p /tmp/vncvt-scenes
+          uv run python -m vncvt --port 5900 --password testpass \
+               --scene-dump-dir /tmp/vncvt-scenes \
+               --scene-control-socket /tmp/vncvt-scene.sock &
           echo "SERVER_PID=$!" >> "$GITHUB_ENV"
-          sleep 2
+          for _ in $(seq 1 20); do
+            if [ -S /tmp/vncvt-scene.sock ]; then break; fi
+            sleep 0.2
+          done
 
       - name: Open Screen Sharing and drive session
         run: |
@@ -97,10 +133,6 @@ jobs:
 
       - name: Capture Screen Sharing window only
         run: |
-          # Grab the Screen Sharing window ID via AppleScript. The
-          # process may be named "Screen Sharing" on older macOS and
-          # "Screen Sharing" or "ScreenSharingAgent" on newer — try
-          # the common name first and fall back to a pgrep sweep.
           WINDOW_ID=$(osascript -e '
             tell application "System Events"
               tell process "Screen Sharing"
@@ -117,7 +149,30 @@ jobs:
           fi
           ls -la screenshot-mac-window.png || true
 
-      - name: Crop window and compare dHash
+      - name: Trigger scene dump and build bundle
+        run: |
+          # Trigger the 4-file server-side dump via the control socket.
+          printf 'DUMP mac_post_echo\n' | nc -U /tmp/vncvt-scene.sock
+          # Crop the title bar off the window screenshot and copy it
+          # in as the client-side scene file.
+          uv run --with imagehash --with pillow python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          src = Path("screenshot-mac-window.png")
+          if not src.exists():
+              print(f"no source capture; skipping client.png copy")
+              raise SystemExit(0)
+          img = Image.open(src).convert("RGB")
+          w, h = img.size
+          cropped = img.crop((1, 28, w - 1, h - 1))
+          out = Path("/tmp/vncvt-scenes/mac_post_echo/scene.client.png")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          cropped.save(out)
+          cropped.save("screenshot-mac-cropped.png")
+          print(f"wrote {out} ({cropped.size})")
+          PY
+
+      - name: Compare dHash (cosmetic regression gate)
         run: |
           uv run --with imagehash --with pillow \
             python tests/crop_and_hash_macos.py
@@ -126,12 +181,13 @@ jobs:
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
 
-      - name: Upload macOS screenshots
+      - name: Upload scene dumps (macOS)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-screenshots
+          name: scene-dumps-macos
           path: |
+            /tmp/vncvt-scenes/
             screenshot-mac-window.png
             screenshot-mac-cropped.png
             tests/baselines/baselines-macos.json

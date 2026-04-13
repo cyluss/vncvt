@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Per-scene debugging bundles are regenerated on every test run
+# and uploaded as CI artifacts, not committed.
+tests/scene-dumps/

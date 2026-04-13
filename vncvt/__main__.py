@@ -5,10 +5,12 @@ import asyncio
 import logging
 import signal
 import sys
+from pathlib import Path
 
 from .terminal import Terminal
 from .renderer import TerminalRenderer
 from .server import RFBServer
+from .scene_dump import SceneDumper, serve_control_socket
 
 
 def main() -> None:
@@ -46,6 +48,17 @@ def main() -> None:
         "--log-traffic", action="store_true",
         help="Log every byte of RFB traffic as hex (noisy — for debugging).",
     )
+    parser.add_argument(
+        "--scene-dump-dir", default=None,
+        help="If set, enable per-scene debug dumps and write them under "
+             "this directory. Requires --scene-control-socket.",
+    )
+    parser.add_argument(
+        "--scene-control-socket", default=None,
+        help="If set, open a Unix-domain-socket listener at this path. "
+             "Tests send 'DUMP <name>\\n' to trigger a scene dump. "
+             "Requires --scene-dump-dir.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -69,7 +82,24 @@ def main() -> None:
         log_traffic=args.log_traffic,
     )
 
+    if bool(args.scene_dump_dir) != bool(args.scene_control_socket):
+        parser.error(
+            "--scene-dump-dir and --scene-control-socket must be used together"
+        )
+
     loop = asyncio.new_event_loop()
+
+    scene_control_server = None
+    if args.scene_dump_dir:
+        dumper = SceneDumper(
+            terminal=terminal,
+            renderer=renderer,
+            out_dir=Path(args.scene_dump_dir),
+        )
+        scene_control_server = loop.run_until_complete(
+            serve_control_socket(dumper, Path(args.scene_control_socket))
+        )
+        loop.create_task(scene_control_server.serve_forever())
 
     def _on_sigchld() -> None:
         if not terminal.alive():
@@ -84,6 +114,12 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if scene_control_server is not None:
+            scene_control_server.close()
+            try:
+                Path(args.scene_control_socket).unlink(missing_ok=True)
+            except Exception:
+                pass
         terminal.close()
         loop.close()
 

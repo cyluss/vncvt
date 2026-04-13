@@ -20,12 +20,14 @@ from .helpers import client_cut_text
 MARKER = "PASTE_FEATURE_D"
 
 
-async def test_paste_renders_as_amber_text(vnc):
+async def test_paste_renders_as_amber_text(vnc, scene):
+    await scene("before_paste")
     # Send "echo MARKER" via clipboard paste, then press Enter.
     client_cut_text(vnc, f"echo {MARKER}")
     vnc.keyboard.press("Return")
     # Let bash echo, pyte absorb, and the update loop render.
     await asyncio.sleep(1.0)
+    await scene("after_paste_enter")
 
     rgba = await vnc.screenshot()
     img = Image.fromarray(rgba).convert("RGB")
