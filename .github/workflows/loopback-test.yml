@@ -59,35 +59,6 @@ jobs:
       - name: Install dependencies (with scene-match deps)
         run: uv sync --all-groups
 
-      - name: Seed login keychain for Screen Sharing
-        if: runner.os == 'macOS'
-        run: |
-          # Screen Sharing.app reads VNC passwords from the user's
-          # login keychain (Internet password, protocol "vnc "). Seed
-          # one so the connect proceeds without a password dialog.
-          #
-          # The Screen Sharing.app bundle path varies by macOS
-          # version (Monterey: /System/Library/CoreServices/Applications/...,
-          # newer: /System/Applications/...). Use mdfind to locate it
-          # at runtime so this works across runner image upgrades.
-          SS_APP=$(mdfind "kMDItemCFBundleIdentifier == com.apple.ScreenSharing" \
-                   2>/dev/null | head -1)
-          echo "Screen Sharing bundle: $SS_APP"
-          if [ -z "$SS_APP" ] || [ ! -d "$SS_APP" ]; then
-            echo "ERROR: could not locate Screen Sharing.app via mdfind" >&2
-            ls /System/Applications/ 2>&1 | grep -i sharing || true
-            ls /System/Library/CoreServices/Applications/ 2>&1 | grep -i sharing || true
-            exit 1
-          fi
-          security add-internet-password \
-              -s 127.0.0.1 \
-              -r "vnc " \
-              -a vnc \
-              -w testpass \
-              -T "$SS_APP" \
-              -U \
-              "$HOME/Library/Keychains/login.keychain-db"
-
       - name: Run loopback test
         run: |
           uv run --with vncdotool --with scikit-image \

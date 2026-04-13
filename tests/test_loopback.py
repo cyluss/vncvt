@@ -134,22 +134,35 @@ def _wait_for_screen_sharing_window(
 
 @contextmanager
 def screen_sharing_driver(
-    host: str, port: int, capture_path: Path
+    host: str, port: int, capture_path: Path, password: str | None = None,
 ) -> Iterator[Path]:
     """Drive the server with Apple Screen Sharing.app.
 
-    Opens the vnc:// URL (auth comes from the seeded keychain entry —
-    see the ``loopback`` job in ``.github/workflows/loopback-test.yml``),
-    waits for the remote window to appear, types a command via System
-    Events, screencaptures the window, and quits Screen Sharing on
-    exit so the next test starts clean.
+    Opens the ``vnc://[password@]host:port`` URL — when ``password``
+    is given it's embedded in the URL so Screen Sharing reads it
+    directly, no keychain dance and no password dialog. Waits for the
+    remote window to appear, types a command via System Events,
+    screencaptures the window by its bounds, and quits Screen Sharing
+    on exit so the next test starts clean.
     """
-    subprocess.run(["open", f"vnc://{host}:{port}"], check=True)
+    if password is not None:
+        # macOS Screen Sharing expects the URL in user:password@host
+        # form even though VNC has no username concept; without the
+        # colon the prefix is parsed as a bare username and Screen
+        # Sharing pops a password dialog instead. Any non-empty
+        # username works.
+        url = f"vnc://vnc:{password}@{host}:{port}"
+    else:
+        url = f"vnc://{host}:{port}"
+    subprocess.run(["open", url], check=True)
     try:
         x, y, w, h = _wait_for_screen_sharing_window()
-        # Give Screen Sharing a beat to actually paint the framebuffer
-        # after the window appears — the window exists before the
-        # remote raster has been drawn.
+        # Bring Screen Sharing to the foreground so screencapture -R
+        # actually grabs its window pixels. Without this, screencapture
+        # grabs whatever happens to be at that screen region — which
+        # on a multi-window environment is usually the desktop or
+        # whatever window is on top of Screen Sharing.
+        _osascript('tell application "Screen Sharing" to activate')
         time.sleep(1.0)
         _osascript(
             'tell application "System Events" to '
@@ -159,6 +172,20 @@ def screen_sharing_driver(
             'tell application "System Events" to key code 36'
         )
         time.sleep(1.0)
+        # Re-activate in case the keystrokes shifted focus, and
+        # re-read the window bounds in case the user/window-manager
+        # moved the window between wait and capture.
+        _osascript('tell application "Screen Sharing" to activate')
+        time.sleep(0.3)
+        x, y, w, h = _wait_for_screen_sharing_window(timeout=3.0)
+        # Debug aid: also capture the full screen so we can see where
+        # Screen Sharing actually is when the region capture comes up
+        # blank. Lives next to the region capture in the artifact dir.
+        full_screen = capture_path.with_name("fullscreen.png")
+        subprocess.run(
+            ["screencapture", "-x", str(full_screen)],
+            check=False,
+        )
         subprocess.run(
             [
                 "screencapture", "-x",
@@ -254,13 +281,22 @@ def test_loopback_vncdo():
     not IS_MAC, reason="Screen Sharing driver is the macOS loopback"
 )
 def test_loopback_screen_sharing():
+    # Run vncvt with VNC auth (security type 2) so the test exercises
+    # the real RFB 3.3 challenge/response path that the previous
+    # session's dialect fix was about. The password is embedded in
+    # the vnc:// URL passed to `open`, which Screen Sharing.app reads
+    # directly — no keychain seeding, no password dialog. Verified
+    # end-to-end against a real Screen Sharing.app on macOS Monterey.
     scene_root = _stable_scene_root("loopback-macos")
     capture = scene_root / "client.png"
+    password = "testpass"
     try:
         with vncvt_session(
-            "--password", "testpass", scene_root=scene_root
+            "--password", password, scene_root=scene_root
         ) as srv:
-            with screen_sharing_driver(srv.host, srv.port, capture):
+            with screen_sharing_driver(
+                srv.host, srv.port, capture, password=password
+            ):
                 _dump_diagnostics(scene_root, "after_capture")
                 scene_dir = _trigger_dump_sync(
                     srv.control_socket, "loopback"
