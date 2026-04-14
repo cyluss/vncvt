@@ -306,6 +306,100 @@ class RFBServer:
                         except (ConnectionError, OSError):
                             self.clients.remove(client)
 
+    async def enter_setup(self) -> None:
+        """Swap to the SET-UP mode overlay. Safe to call from any coro."""
+        from .setup_screen import SetupScreen
+
+        if self._in_setup:
+            return
+        try:
+            import importlib.metadata
+            version = importlib.metadata.version("vncvt")
+        except Exception:
+            version = "0.1.0"
+
+        async with self._resize_lock:
+            self._setup = SetupScreen(
+                cols=self.terminal.cols,
+                rows=self.terminal.rows,
+                initial={
+                    "cols": self.terminal.cols,
+                    "rows": self.terminal.rows,
+                    "font_size": self.renderer.font_size,
+                    "fps": self.fps,
+                },
+                server_info={
+                    "version": f"vncvt {version}",
+                    "clients": len(self.clients),
+                },
+            )
+            self._in_setup = True
+            self._active_screen = self._setup.screen
+            # Render immediately so first FBU pass has pixels
+            all_rows = set(range(self.terminal.rows))
+            self.renderer.render_dirty(self._active_screen, all_rows)
+            self._active_screen.dirty.clear()
+            # Mark all rows dirty via the helper path — the update loop
+            # will pick them up on the next tick.
+            self._setup.screen.dirty.update(range(self.terminal.rows))
+
+    async def exit_setup(self, apply: bool) -> None:
+        """Leave SET-UP mode. If apply=True, write the snapshot's values
+        back to the live server."""
+        if not self._in_setup or self._setup is None:
+            return
+        snap = self._setup.snapshot() if apply else None
+        async with self._resize_lock:
+            self._in_setup = False
+            self._active_screen = self.terminal.screen
+            self._setup = None
+            # Force a full re-render of the live terminal
+            all_rows = set(range(self.terminal.rows))
+            self.renderer.render_dirty(self._active_screen, all_rows)
+            self._active_screen.dirty.clear()
+            self.terminal.screen.dirty.update(range(self.terminal.rows))
+        if snap is not None:
+            await self._apply_setup_snapshot(snap)
+
+    async def _apply_setup_snapshot(self, snap: dict) -> None:
+        """Apply SET-UP mode changes: fps, font size, cols/rows."""
+        # fps first — cheapest, just an attribute write
+        new_fps = snap.get("FPS")
+        if isinstance(new_fps, int):
+            self.fps = new_fps
+
+        # Font size — rebuild the renderer under the lock
+        new_font = snap.get("Font size")
+        if isinstance(new_font, int) and new_font != self.renderer.font_size:
+            async with self._resize_lock:
+                old_renderer = self.renderer
+                self.renderer = TerminalRenderer(
+                    cols=self.terminal.cols,
+                    rows=self.terminal.rows,
+                    font_path=old_renderer._font_path,
+                    font_size=new_font,
+                )
+                all_rows = set(range(self.terminal.rows))
+                self.renderer.render_dirty(self._active_screen, all_rows)
+                self._active_screen.dirty.clear()
+                new_w = self.renderer.width
+                new_h = self.renderer.height
+                for client in list(self.clients):
+                    try:
+                        await client.notify_resize(new_w, new_h)
+                    except (ConnectionError, OSError):
+                        if client in self.clients:
+                            self.clients.remove(client)
+
+        # cols/rows last — handle_resize takes its own lock
+        new_cols = snap.get("Columns")
+        new_rows = snap.get("Rows")
+        if (
+            isinstance(new_cols, int) and isinstance(new_rows, int)
+            and (new_cols != self.terminal.cols or new_rows != self.terminal.rows)
+        ):
+            await self.handle_resize(new_cols, new_rows)
+
     async def handle_resize(self, cols: int, rows: int) -> tuple[int, int]:
         """Resize the shared terminal + renderer and notify all
         connected clients. Returns the actual ``(cols, rows)`` after
@@ -599,6 +693,24 @@ class RFBClient:
                 # Track Ctrl state
                 if keysym in (0xFFE3, 0xFFE4):  # Control_L, Control_R
                     self._ctrl_pressed = bool(down_flag)
+
+                # F3 = SET-UP mode toggle. Captured on key-down;
+                # the shell never sees \x1bOR for F3 anymore.
+                if down_flag and keysym == 0xFFC0:  # F3
+                    if self.server._in_setup:
+                        await self.server.exit_setup(apply=False)
+                    else:
+                        await self.server.enter_setup()
+                    continue
+
+                # In SET-UP mode: Escape applies, other keys go to widget
+                if self.server._in_setup:
+                    if down_flag:
+                        if keysym == 0xFF1B:  # Escape = apply + exit
+                            await self.server.exit_setup(apply=True)
+                        elif self.server._setup is not None:
+                            self.server._setup.on_key(keysym)
+                    continue
 
                 if down_flag:
                     byte_seq = keysym_to_bytes(keysym, self._ctrl_pressed)
