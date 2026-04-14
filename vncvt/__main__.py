@@ -8,55 +8,140 @@ import logging
 import os
 import signal
 import sys
+import tomllib
 from pathlib import Path
 
 from .terminal import Terminal
-from .renderer import TerminalRenderer, FONT_SEARCH_PATHS, _find_font
+from .renderer import (
+    TerminalRenderer, FONT_SEARCH_PATHS, _find_font, THEMES, apply_theme,
+)
 from .server import RFBServer
 from .scene_dump import SceneDumper, serve_control_socket
 
 
+# Config keys that are allowed in the TOML file. Each maps to the
+# corresponding argparse `dest` name. We constrain the set so an
+# unknown key in the config file fails loud.
+_CONFIG_KEYS = {
+    "host", "port", "cols", "rows", "mode", "font_size", "font",
+    "fps", "theme", "line_height", "shell", "password",
+}
+
+
+def _config_path() -> Path:
+    """Return the XDG config path for vncvt."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "vncvt" / "config.toml"
+
+
+def _load_config(path: Path) -> dict:
+    """Load TOML config. Returns {} if the file doesn't exist.
+
+    Raises SystemExit on invalid TOML or unknown keys so misconfiguration
+    fails fast instead of silently ignoring the user's intent.
+    """
+    if not path.exists():
+        return {}
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        sys.exit(f"vncvt: invalid config at {path}: {e}")
+    # Normalize TOML key style (kebab-case → snake_case) so users can
+    # write `font-size = 13` like the CLI flag.
+    normalized = {k.replace("-", "_"): v for k, v in data.items()}
+    unknown = set(normalized) - _CONFIG_KEYS
+    if unknown:
+        sys.exit(
+            f"vncvt: unknown keys in {path}: {sorted(unknown)}. "
+            f"Allowed: {sorted(_CONFIG_KEYS)}"
+        )
+    return normalized
+
+
 def main() -> None:
+    # First-pass parser to capture --no-config / --config so we know
+    # whether to load the TOML file before building the real parser.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--no-config", action="store_true")
+    pre.add_argument("--config", default=None)
+    pre_args, _ = pre.parse_known_args()
+
+    if pre_args.no_config:
+        config = {}
+    else:
+        config_path = (
+            Path(pre_args.config) if pre_args.config else _config_path()
+        )
+        config = _load_config(config_path)
+
+    def cfg(key: str, fallback):
+        return config.get(key, fallback)
+
     parser = argparse.ArgumentParser(
         description="VNC terminal server with VT220 amber aesthetic"
     )
     parser.add_argument(
-        "--port", type=int, default=5900, help="VNC port (default: 5900)"
+        "--config", default=None,
+        help=f"Path to a TOML config file (default: {_config_path()})",
     )
     parser.add_argument(
-        "--host", default="127.0.0.1", help="Listen address (default: 127.0.0.1)"
+        "--no-config", action="store_true",
+        help="Skip loading the config file even if one exists.",
     )
     parser.add_argument(
-        "--cols", type=int, default=None,
+        "--port", type=int, default=cfg("port", 5900),
+        help="VNC port (default: 5900)",
+    )
+    parser.add_argument(
+        "--host", default=cfg("host", "127.0.0.1"),
+        help="Listen address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--cols", type=int, default=cfg("cols", None),
         help="Terminal columns (default: 80; mutually exclusive with --mode)",
     )
     parser.add_argument(
-        "--rows", type=int, default=None,
+        "--rows", type=int, default=cfg("rows", None),
         help="Terminal rows (default: 24; mutually exclusive with --mode)",
     )
     parser.add_argument(
-        "--mode", default=None, choices=("80x24", "132x24"),
+        "--mode", default=cfg("mode", None), choices=("80x24", "132x24"),
         help="VT220 screen preset. Mutually exclusive with --cols/--rows.",
     )
     parser.add_argument(
-        "--font-size", type=int, default=14,
-        help="Font size in points (default: 14 — readable on non-retina)",
+        "--font-size", type=int, default=cfg("font_size", 13),
+        help="Font size in points (default: 13). Glyphs are rasterized "
+             "via Skia with subpixel AA + LCD filtering; 13pt SF Mono "
+             "matches macOS Terminal.app's appearance.",
     )
     parser.add_argument(
-        "--fps", type=int, default=30,
+        "--theme", default=cfg("theme", "light"), choices=sorted(THEMES),
+        help="Color palette (default: light). light = black on white; "
+             "dark = white on black; amber = amber phosphor on black; "
+             "green = classic phosphor green.",
+    )
+    parser.add_argument(
+        "--line-height", type=float, default=cfg("line_height", 1.1),
+        help="Line height multiplier (default: 1.1). Values >1.0 add "
+             "vertical space between rows; range 0.8-2.0.",
+    )
+    parser.add_argument(
+        "--fps", type=int, default=cfg("fps", 30),
         help="Framebuffer update rate cap (default: 30, range: 1-120)",
     )
     parser.add_argument(
-        "--font", default=None, help="Path to a monospace TTF font"
+        "--font", default=cfg("font", None),
+        help="Path to a monospace TTF font",
     )
     parser.add_argument(
         "--shell",
-        default=os.environ.get("SHELL") or "/bin/bash",
+        default=cfg("shell", os.environ.get("SHELL") or "/bin/bash"),
         help="Shell to run (default: $SHELL from the user's profile, "
              "falling back to /bin/bash)",
     )
     parser.add_argument(
-        "--password", default=None,
+        "--password", default=cfg("password", None),
         help="Enable VNC Authentication (type 2) with this password. "
              "Required for macOS Screen Sharing.app. If omitted, only "
              "None auth (type 1) is offered.",
@@ -88,6 +173,13 @@ def main() -> None:
     if not 1 <= args.fps <= 120:
         parser.error("--fps must be between 1 and 120")
 
+    # Validate --line-height
+    if not 0.8 <= args.line_height <= 2.0:
+        parser.error("--line-height must be between 0.8 and 2.0")
+
+    # Install theme palette before constructing the renderer
+    apply_theme(args.theme)
+
     # Resolve --mode preset
     if args.mode is not None:
         if args.cols is not None or args.rows is not None:
@@ -116,10 +208,14 @@ def main() -> None:
                 "font_size": args.font_size,
                 "fps": args.fps,
                 "shell": args.shell,
+                "theme": args.theme,
+                "line_height": args.line_height,
             },
             "font_search_path": list(FONT_SEARCH_PATHS),
             "font_found": args.font or _find_font(FONT_SEARCH_PATHS),
             "listen": f"{args.host}:{args.port}",
+            "config_file": str(_config_path()) if not pre_args.no_config else None,
+            "config_loaded": bool(config),
         }
         print(json.dumps(info, indent=2))
         return
@@ -135,6 +231,7 @@ def main() -> None:
         rows=args.rows,
         font_path=args.font,
         font_size=args.font_size,
+        line_height=args.line_height,
     )
     server = RFBServer(
         host=args.host,

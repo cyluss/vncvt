@@ -94,6 +94,10 @@ def start_vncvt(
 
     args = [
         "uv", "run", "python", "-m", "vncvt",
+        # Tests must not read the user's actual ~/.config/vncvt/config.toml
+        # — they assert against built-in defaults and any user override
+        # would silently break them.
+        "--no-config",
         "--port", str(port),
         "--scene-dump-dir", str(scene_root),
         "--scene-control-socket", str(control_socket),

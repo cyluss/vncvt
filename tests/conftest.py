@@ -83,8 +83,15 @@ def vncvt_server(tmp_path, request):
     Yields a ``VncvtHandle``. For backwards compatibility, the handle
     iterates as ``(host, port)`` so ``host, port = vncvt_server`` keeps
     working for tests that don't care about scene dumps.
+
+    Forces --theme amber and --line-height 1.0 so the existing tests
+    (padding, pixel format, paste, setup mode) that assert specific
+    colors / cell dimensions stay valid against their hardcoded
+    expectations.
     """
-    handle = _spawn_vncvt((), tmp_path)
+    handle = _spawn_vncvt(
+        ("--theme", "amber", "--line-height", "1.0"), tmp_path,
+    )
     request.node._vncvt_handle = handle  # for failure-dump hook
     try:
         yield handle
