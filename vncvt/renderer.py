@@ -165,6 +165,11 @@ class TerminalRenderer:
             raise RuntimeError(
                 "No monospace font found. Install dejavu-sans-mono or use --font."
             )
+        # Stash resolved font path + size so Phase 2 SET-UP mode can
+        # rebuild this renderer without guessing (Pillow's ImageFont
+        # doesn't expose the path portably across versions).
+        self._font_path = font_path
+        self.font_size = font_size
         self.font = ImageFont.truetype(font_path, font_size)
 
         bold_path = _find_font(BOLD_FONT_SEARCH_PATHS)
