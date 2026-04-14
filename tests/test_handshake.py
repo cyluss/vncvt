@@ -15,7 +15,7 @@ from .baselines import assert_hash
 # ``--font-size`` argparse default. Kept in sync manually; if the CLI
 # default changes again the assertion below will fail loudly with the
 # expected vs. actual dimensions, pointing straight at this constant.
-_CLI_DEFAULT_FONT_SIZE = 11
+_CLI_DEFAULT_FONT_SIZE = 14
 
 
 async def test_connects_and_screenshots(vnc, scene):

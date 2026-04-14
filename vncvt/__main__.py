@@ -39,7 +39,8 @@ def main() -> None:
         help="VT220 screen preset. Mutually exclusive with --cols/--rows.",
     )
     parser.add_argument(
-        "--font-size", type=int, default=11, help="Font size in points (default: 11)"
+        "--font-size", type=int, default=14,
+        help="Font size in points (default: 14 — readable on non-retina)",
     )
     parser.add_argument(
         "--fps", type=int, default=30,
