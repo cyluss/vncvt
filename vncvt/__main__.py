@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+import importlib.metadata
+import json
 import logging
 import os
 import signal
@@ -9,7 +11,7 @@ import sys
 from pathlib import Path
 
 from .terminal import Terminal
-from .renderer import TerminalRenderer
+from .renderer import TerminalRenderer, FONT_SEARCH_PATHS, _find_font
 from .server import RFBServer
 from .scene_dump import SceneDumper, serve_control_socket
 
@@ -25,13 +27,23 @@ def main() -> None:
         "--host", default="127.0.0.1", help="Listen address (default: 127.0.0.1)"
     )
     parser.add_argument(
-        "--cols", type=int, default=80, help="Terminal columns (default: 80)"
+        "--cols", type=int, default=None,
+        help="Terminal columns (default: 80; mutually exclusive with --mode)",
     )
     parser.add_argument(
-        "--rows", type=int, default=24, help="Terminal rows (default: 24)"
+        "--rows", type=int, default=None,
+        help="Terminal rows (default: 24; mutually exclusive with --mode)",
+    )
+    parser.add_argument(
+        "--mode", default=None, choices=("80x24", "132x24"),
+        help="VT220 screen preset. Mutually exclusive with --cols/--rows.",
     )
     parser.add_argument(
         "--font-size", type=int, default=11, help="Font size in points (default: 11)"
+    )
+    parser.add_argument(
+        "--fps", type=int, default=30,
+        help="Framebuffer update rate cap (default: 30, range: 1-120)",
     )
     parser.add_argument(
         "--font", default=None, help="Path to a monospace TTF font"
@@ -64,7 +76,52 @@ def main() -> None:
              "{\"version\":1,\"op\":\"dump\",\"name\":\"<name>\"} to "
              "trigger a scene dump. Requires --scene-dump-dir.",
     )
+    parser.add_argument(
+        "--info", action="store_true",
+        help="Print a JSON diagnostic dump (version, defaults, font search path) "
+             "and exit without starting the server.",
+    )
     args = parser.parse_args()
+
+    # Validate --fps
+    if not 1 <= args.fps <= 120:
+        parser.error("--fps must be between 1 and 120")
+
+    # Resolve --mode preset
+    if args.mode is not None:
+        if args.cols is not None or args.rows is not None:
+            parser.error("--mode is mutually exclusive with --cols/--rows")
+        mode_cols, mode_rows = args.mode.split("x")
+        args.cols = int(mode_cols)
+        args.rows = int(mode_rows)
+    if args.cols is None:
+        args.cols = 80
+    if args.rows is None:
+        args.rows = 24
+
+    # --info one-shot diagnostic
+    if args.info:
+        try:
+            version = importlib.metadata.version("vncvt")
+        except importlib.metadata.PackageNotFoundError:
+            version = "unknown"
+        info = {
+            "version": version,
+            "defaults": {
+                "host": args.host,
+                "port": args.port,
+                "cols": args.cols,
+                "rows": args.rows,
+                "font_size": args.font_size,
+                "fps": args.fps,
+                "shell": args.shell,
+            },
+            "font_search_path": list(FONT_SEARCH_PATHS),
+            "font_found": args.font or _find_font(FONT_SEARCH_PATHS),
+            "listen": f"{args.host}:{args.port}",
+        }
+        print(json.dumps(info, indent=2))
+        return
 
     logging.basicConfig(
         level=logging.INFO,
@@ -85,6 +142,7 @@ def main() -> None:
         renderer=renderer,
         password=args.password,
         log_traffic=args.log_traffic,
+        fps=args.fps,
     )
 
     if bool(args.scene_dump_dir) != bool(args.scene_control_socket):

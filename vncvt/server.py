@@ -210,6 +210,7 @@ class RFBServer:
         renderer: TerminalRenderer,
         password: str | None = None,
         log_traffic: bool = False,
+        fps: int = 30,
     ):
         self.host = host
         self.port = port
@@ -217,6 +218,7 @@ class RFBServer:
         self.renderer = renderer
         self.password = password
         self.log_traffic = log_traffic
+        self.fps = fps
         self.clients: list[RFBClient] = []
         self._running = False
         # Serializes resizes against the render+send pass in
@@ -254,7 +256,7 @@ class RFBServer:
     async def _update_loop(self) -> None:
         """Periodic loop: render dirty rows and push to clients."""
         while self._running:
-            await asyncio.sleep(1 / 30)  # ~30 fps cap
+            await asyncio.sleep(1 / max(1, self.fps))
 
             # Hold the resize lock across the whole render+send pass so
             # a concurrent handle_resize cannot reallocate the framebuffer
