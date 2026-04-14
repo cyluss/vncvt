@@ -44,16 +44,12 @@ BOLD_FG = (255, 200, 0)        # #ffc800 — brighter amber for bold
 CURSOR_COLOR = (255, 156, 0)   # same as default FG
 
 FONT_SEARCH_PATHS = [
-    # Menlo is first on macOS — it has fuller box-drawing coverage and
-    # reads better than SFNSMono at sub-retina pixel sizes.
-    "/System/Library/Fonts/Menlo.ttc",
-    "/System/Library/Fonts/SFNSMono.ttf",
-    # Linux fallbacks
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
     "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
+    "/System/Library/Fonts/SFNSMono.ttf",
 ]
 
 BOLD_FONT_SEARCH_PATHS = [
@@ -207,42 +203,6 @@ class TerminalRenderer:
         self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
         self._prev_cursor = (-1, -1)
 
-    def _draw_glyph(
-        self,
-        ch: str,
-        font: "ImageFont.FreeTypeFont",
-        dest_x: int,
-        dest_y: int,
-        fg: tuple[int, int, int],
-        target: "Image.Image | None" = None,
-    ) -> None:
-        """Render a glyph with hard-edge (no anti-aliasing) output.
-
-        Pillow's ImageDraw.text uses grayscale coverage from FreeType,
-        which produces muddy intermediate pixels against a high-contrast
-        amber/black palette. We sidestep that by grabbing the 8-bit
-        glyph bitmap, thresholding it to binary, and pasting a solid-
-        color layer through the binary mask.
-        """
-        img = target if target is not None else self.image
-        mask_L = font.getmask(ch, mode="L")
-        if mask_L.size == (0, 0):
-            return
-        mask_img = Image.frombytes("L", mask_L.size, bytes(mask_L))
-        # Threshold at 128 — any pixel with >=50% coverage becomes full
-        # foreground; everything else is transparent.
-        threshed = mask_img.point(lambda v: 255 if v >= 128 else 0, mode="L")
-        # Pillow text drawing positions glyphs by their top-left and
-        # uses font metrics for the baseline. Mimic that with getmask's
-        # offset so the baseline aligns correctly.
-        # FreeType's glyph bitmap origin is top-left of the bitmap box;
-        # we need to add the font's ascent offset to position correctly.
-        # ImageFont internally stores this; getmask returns the bitmap
-        # anchored to match text() semantics when pasted at the same
-        # coords.
-        fg_layer = Image.new("RGB", mask_L.size, fg)
-        img.paste(fg_layer, (dest_x, dest_y), threshed)
-
     def resize(self, cols: int, rows: int) -> None:
         """Resize the framebuffer to new terminal dimensions."""
         self.cols = cols
@@ -360,10 +320,9 @@ class TerminalRenderer:
                 if w == 0 and col > 0 and ch:
                     font = self.font_bold if char.bold else self.font
                     prev_x = (col - 1) * self.cell_width + pad
-                    self._draw_glyph(
-                        ch, font,
-                        prev_x + self._x_offset, y + self._y_offset,
-                        fg,
+                    draw.text(
+                        (prev_x + self._x_offset, y + self._y_offset),
+                        ch, font=font, fill=fg,
                     )
                     continue
 
@@ -379,25 +338,24 @@ class TerminalRenderer:
                     font = self.font_bold if char.bold else self.font
                     glyph_adv = int(round(font.getlength(ch)))
                     if glyph_adv > cell_px:
-                        # Glyph wider than its cell: render into a temp
-                        # RGB image via _draw_glyph, then crop+paste so
-                        # overflow gets clipped at cell bounds.
+                        # Glyph wider than its cell: render to a temp RGBA
+                        # image and paste cropped to the cell bounds.
                         tmp = Image.new(
-                            "RGB",
+                            "RGBA",
                             (glyph_adv + 4, self.cell_height),
-                            DEFAULT_BG,
+                            (0, 0, 0, 0),
                         )
-                        self._draw_glyph(
-                            ch, font,
-                            self._x_offset, self._y_offset, fg,
-                            target=tmp,
+                        tdraw = ImageDraw.Draw(tmp)
+                        tdraw.text(
+                            (self._x_offset, self._y_offset),
+                            ch, font=font, fill=fg + (255,),
                         )
                         cropped = tmp.crop((0, 0, cell_px, self.cell_height))
-                        self.image.paste(cropped, (x, y))
+                        self.image.paste(cropped, (x, y), cropped)
                     else:
-                        self._draw_glyph(
-                            ch, font,
-                            x + self._x_offset, y + self._y_offset, fg,
+                        draw.text(
+                            (x + self._x_offset, y + self._y_offset),
+                            ch, font=font, fill=fg,
                         )
 
                 # Underline
