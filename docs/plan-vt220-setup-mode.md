@@ -1,5 +1,10 @@
 # vncvt CLI flags + VT220 SET-UP mode overlay
 
+**Status: implemented on 2026-04-14.** Both phases landed across
+commits `67a83cd` (Phase 1), `a1657be` (P2.1), `1b29557` (P2.2),
+`9d79538` (P2.3+P2.4), `7a2ad43` (P2.5+P2.6), `8ee2a34` (P2.7),
+and `6e61635` (P2.8). All 14 widget unit tests + 2 e2e tests green.
+
 ## Context
 
 The user is reading the VT220 Technical Manual and wants vncvt to mirror two
