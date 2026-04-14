@@ -443,18 +443,25 @@ class TerminalRenderer:
             if 0 <= idx < 256:
                 return _PALETTE_256[idx]
 
-        # 6-char hex string (truecolor) — amber tint it
+        # 6-char hex string (truecolor). We route it through the
+        # current theme's DEFAULT_BG → DEFAULT_FG luminance ramp so a
+        # theme switch actually recolors the output. The old amber-
+        # hardcoded warm-shift was theme-agnostic and made Claude
+        # Code's truecolor borders / banner stay amber even after
+        # switching to dark/light.
         if isinstance(color, str) and len(color) == 6:
             try:
                 r = int(color[0:2], 16)
                 g = int(color[2:4], 16)
                 b = int(color[4:6], 16)
-                # Warm-shift toward amber
-                lum = (r * 299 + g * 587 + b * 114) / 1000
-                ar = int(r * 0.4 + lum * 0.6 * 255 / 255)
-                ag = int(g * 0.2 + lum * 0.5 * 156 / 255)
-                ab = int(b * 0.1 + lum * 0.1 * 50 / 255)
-                return (min(ar, 255), min(ag, 255), min(ab, 255))
+                lum = (r * 299 + g * 587 + b * 114) / 1000 / 255.0
+                bg_r, bg_g, bg_b = DEFAULT_BG
+                fg_r, fg_g, fg_b = DEFAULT_FG
+                return (
+                    int(bg_r + (fg_r - bg_r) * lum),
+                    int(bg_g + (fg_g - bg_g) * lum),
+                    int(bg_b + (fg_b - bg_b) * lum),
+                )
             except ValueError:
                 pass
 
