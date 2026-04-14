@@ -900,7 +900,14 @@ class RFBClient:
         return img.convert("RGBA").tobytes("raw", mode)
 
     async def _send_full_update(self, fb_image) -> None:
-        """Send a non-incremental full framebuffer update."""
+        """Send a non-incremental full framebuffer update.
+
+        Uses a drain() timeout to avoid wedging the server if a client
+        stops reading mid-transfer (test clients that only drive the
+        handshake are a common offender — they never drain the FBU,
+        so a naive await drain() blocks the whole update loop until
+        the TCP connection times out).
+        """
         renderer = self.server.renderer
         pixel_data = self._image_to_bytes(fb_image)
         header = struct.pack(">BxH", 0, 1)  # type=0, 1 rectangle
@@ -908,7 +915,12 @@ class RFBClient:
             ">HHHHi", 0, 0, renderer.width, renderer.height, 0  # Raw encoding
         )
         self.writer.write(header + rect_header + pixel_data)
-        await self.writer.drain()
+        try:
+            await asyncio.wait_for(self.writer.drain(), timeout=2.0)
+        except asyncio.TimeoutError:
+            raise ConnectionError(
+                "client not draining framebuffer update within 2s"
+            )
 
     async def send_framebuffer_update(self, rects) -> None:
         """Send incremental framebuffer update with given rectangles.
