@@ -170,15 +170,25 @@ def main() -> None:
 
     def _on_sigchld() -> None:
         if not terminal.alive():
-            logging.info("Shell process exited")
-            server.shutdown()
-            loop.stop()
+            logging.info("Shell process exited — showing goodbye notice")
+            # Schedule the graceful shutdown on the event loop; don't
+            # call shutdown() directly here because we want the render
+            # loop to push one more update before we tear down.
+            async def _goodbye():
+                await server.shutdown_with_notice(
+                    "[ Shell exited. Press Ctrl+C on the server to quit. ]"
+                )
+                loop.stop()
+            loop.create_task(_goodbye())
 
     loop.add_signal_handler(signal.SIGCHLD, _on_sigchld)
 
     try:
         loop.run_until_complete(server.start())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, RuntimeError):
+        # RuntimeError arises if the loop was stopped by _on_sigchld
+        # (shell exit path) — server.start() was awaiting serve_forever()
+        # and never got a chance to return.
         pass
     finally:
         if scene_control_server is not None:

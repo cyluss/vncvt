@@ -448,6 +448,26 @@ class RFBServer:
     def shutdown(self) -> None:
         self._running = False
 
+    async def shutdown_with_notice(self, message: str) -> None:
+        """Render a final message into the terminal screen, flush it to
+        clients, then shut down. Call this when the shell exits so the
+        user sees a clean goodbye instead of an abrupt disconnect."""
+        # Feed the message directly into pyte via the terminal's stream.
+        # Clear to end of line + set bright yellow + message + reset.
+        notice = f"\r\n\x1b[2K\x1b[1;33m{message}\x1b[0m\r\n"
+        try:
+            self.terminal.stream.feed(notice)
+        except Exception:
+            pass
+        # Mark all rows dirty so the whole screen re-renders
+        self.terminal.screen.dirty.update(range(self.terminal.rows))
+        # Give the render loop a few ticks to push the update
+        for _ in range(5):
+            await asyncio.sleep(1 / max(1, self.fps))
+        # Linger briefly so the user can read the message
+        await asyncio.sleep(1.0)
+        self._running = False
+
 
 # RFB security types (RFC 6143 §7.2).
 SEC_INVALID = 0
