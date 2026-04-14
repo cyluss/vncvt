@@ -39,8 +39,17 @@ uv run vncvt
 --rows ROWS         Terminal rows (default: 24)
 --mode MODE         VT220 screen preset: 80x24 or 132x24
                     (mutually exclusive with --cols/--rows)
---font-size SIZE    Font size in points (default: 11)
---font PATH         Path to a monospace TTF font
+--font-size SIZE    Font size in points (default: 13). Glyphs are
+                    rasterized via Skia with full TrueType hinting.
+--font PATH         Path to a monospace TTF font (default: SF Mono
+                    on macOS, DejaVu Sans Mono on Linux, Terminus
+                    TTF as a vendored fallback)
+--theme NAME        Color palette: light, dark, amber, green
+                    (default: light)
+--line-height MULT  Line height multiplier, 0.8–2.0 (default: 1.1)
+--config PATH       Path to a TOML config file (default:
+                    ~/.config/vncvt/config.toml)
+--no-config         Skip loading the config file
 --fps N             Framebuffer update rate cap, 1-120 (default: 30)
 --shell SHELL       Shell to run (default: $SHELL)
 --password PW       Enable VNC Authentication. Required for macOS
@@ -64,8 +73,26 @@ restarting the server.
 | `Left`       | Cycle backwards                        |
 | `Escape`     | Apply changes and exit SET-UP          |
 
-Note: F3 no longer reaches the shell while vncvt is running — it's
-always intercepted by SET-UP mode.
+SET-UP mode lets you change Columns, Rows, Font size, FPS, **Theme**,
+and **Line height** live and apply them with Escape. F3 no longer
+reaches the shell while vncvt is running — it's always intercepted
+by SET-UP mode.
+
+## Config file
+
+Persistent defaults live at `~/.config/vncvt/config.toml` (or
+`$XDG_CONFIG_HOME/vncvt/config.toml`). Keys mirror the CLI flags
+(kebab-case allowed):
+
+```toml
+theme = "light"
+font-size = 13
+line-height = 1.1
+font = "/System/Library/Fonts/SFNSMono.ttf"
+```
+
+CLI flags override config values. Pass `--no-config` to skip the
+file entirely.
 
 ## Examples
 
