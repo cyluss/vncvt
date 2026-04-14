@@ -318,6 +318,17 @@ class RFBServer:
         except Exception:
             version = "0.1.0"
 
+        # Detect current theme by matching the active bg to the theme
+        # table. Read DEFAULT_BG from the renderer module via attribute
+        # access rather than `from ... import DEFAULT_BG` so we see the
+        # current value (apply_theme reassigns the module attribute).
+        from . import renderer as rmod
+        current_theme = "amber"
+        for name, palette in rmod.THEMES.items():
+            if palette["bg"] == rmod.DEFAULT_BG:
+                current_theme = name
+                break
+
         async with self._resize_lock:
             self._setup = SetupScreen(
                 cols=self.terminal.cols,
@@ -327,6 +338,8 @@ class RFBServer:
                     "rows": self.terminal.rows,
                     "font_size": self.renderer.font_size,
                     "fps": self.fps,
+                    "theme": current_theme,
+                    "line_height": self.renderer.line_height,
                 },
                 server_info={
                     "version": f"vncvt {version}",
@@ -362,31 +375,65 @@ class RFBServer:
             await self._apply_setup_snapshot(snap)
 
     async def _apply_setup_snapshot(self, snap: dict) -> None:
-        """Apply SET-UP mode changes: fps, font size, cols/rows."""
+        """Apply SET-UP mode changes: fps, theme, font size + line
+        height, cols/rows."""
+        from .renderer import apply_theme
+
         # fps first — cheapest, just an attribute write
         new_fps = snap.get("FPS")
         if isinstance(new_fps, int):
             self.fps = new_fps
 
-        # Font size — rebuild the renderer under the lock
+        # Theme — swap the module-level palette constants
+        new_theme = snap.get("Theme")
+        if isinstance(new_theme, str):
+            try:
+                apply_theme(new_theme)
+            except ValueError:
+                pass
+
+        # Font size + line height — rebuild the renderer under the lock
         new_font = snap.get("Font size")
-        if isinstance(new_font, int) and new_font != self.renderer.font_size:
+        new_lh = snap.get("Line height")
+        font_changed = (
+            isinstance(new_font, int) and new_font != self.renderer.font_size
+        )
+        lh_changed = (
+            isinstance(new_lh, (int, float))
+            and abs(new_lh - self.renderer.line_height) > 1e-6
+        )
+        theme_changed = isinstance(new_theme, str)
+        if font_changed or lh_changed or theme_changed:
             async with self._resize_lock:
                 old_renderer = self.renderer
                 self.renderer = TerminalRenderer(
                     cols=self.terminal.cols,
                     rows=self.terminal.rows,
                     font_path=old_renderer._font_path,
-                    font_size=new_font,
+                    font_size=new_font if font_changed else old_renderer.font_size,
+                    line_height=new_lh if lh_changed else old_renderer.line_height,
                 )
                 all_rows = set(range(self.terminal.rows))
                 self.renderer.render_dirty(self._active_screen, all_rows)
                 self._active_screen.dirty.clear()
                 new_w = self.renderer.width
                 new_h = self.renderer.height
+                size_changed = (
+                    new_w != old_renderer.width
+                    or new_h != old_renderer.height
+                )
                 for client in list(self.clients):
                     try:
-                        await client.notify_resize(new_w, new_h)
+                        if size_changed:
+                            await client.notify_resize(new_w, new_h)
+                        else:
+                            # Theme-only change: dimensions unchanged, so
+                            # don't send a DesktopSize message (Screen
+                            # Sharing treats same-dimension resize as
+                            # a no-op and may skip the following frame
+                            # buffer update). Push the full image
+                            # directly instead.
+                            await client._send_full_update(self.renderer.image)
                     except (ConnectionError, OSError):
                         if client in self.clients:
                             self.clients.remove(client)

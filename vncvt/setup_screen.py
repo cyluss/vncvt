@@ -101,8 +101,18 @@ class SetupScreen:
         self.fields: list[SetupField] = [
             _field("Columns", [80, 132], initial.get("cols", 80)),
             _field("Rows", [24, 36, 48], initial.get("rows", 24)),
-            _field("Font size", list(range(8, 33)), initial.get("font_size", 11)),
+            _field("Font size", list(range(8, 33)), initial.get("font_size", 13)),
             _field("FPS", [15, 30, 60, 90, 120], initial.get("fps", 30)),
+            _field(
+                "Theme",
+                ["amber", "dark", "light", "green"],
+                initial.get("theme", "amber"),
+            ),
+            _field(
+                "Line height",
+                [0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.75, 2.0],
+                initial.get("line_height", 1.0),
+            ),
         ]
         # Readonly info fields
         self.fields.append(
@@ -121,7 +131,7 @@ class SetupScreen:
         )
 
         self.selected = 0  # index into self.fields (editable only)
-        self._editable_count = 4  # first N fields are editable
+        self._editable_count = 6  # first N fields are editable
         self.redraw()
 
     # -------- key handling --------

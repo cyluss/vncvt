@@ -72,7 +72,8 @@ def test_navigation_wraps():
     s = SetupScreen(80, 24)
     assert s.selected == 0
     s.on_key(KEY_UP)  # wraps to last editable field
-    assert s.selected == 3  # 4 editable fields, indices 0..3
+    # 6 editable fields now: Columns, Rows, Font size, FPS, Theme, Line height
+    assert s.selected == s._editable_count - 1
     s.on_key(KEY_DOWN)
     assert s.selected == 0
 
@@ -109,7 +110,9 @@ def test_unselected_row_no_reverse_video():
 def test_snapshot_returns_editable_only():
     s = SetupScreen(80, 24)
     snap = s.snapshot()
-    assert set(snap.keys()) == {"Columns", "Rows", "Font size", "FPS"}
+    assert set(snap.keys()) == {
+        "Columns", "Rows", "Font size", "FPS", "Theme", "Line height",
+    }
     assert "Server" not in snap
     assert "Clients" not in snap
 
