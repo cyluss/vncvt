@@ -37,7 +37,8 @@ packages = ["vncvt"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-m 'not loopback'"
+addopts = "-m 'not loopback and not claude_code'"
 markers = [
     "loopback: end-to-end CI loopback tests that spawn vncvt + drive a real VNC client (vncdotool on Linux, Screen Sharing.app on macOS). Opt in with `pytest -m loopback`.",
+    "claude_code: tests that spawn the `claude` CLI under vncvt. Auto-skipped when the binary is not on PATH. Opt in with `pytest -m claude_code`.",
 ]

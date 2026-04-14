@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .helpers import read_one_message
+from tests.helpers import read_one_message
 
 
 async def test_drag_select_populates_clipboard(vnc, scene):

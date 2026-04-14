@@ -25,8 +25,8 @@ from typing import Iterator
 import pytest
 
 from vncvt.supervisor import vncvt_session
-from .check_scene_match import verify_scene
-from .scenes import trigger_server_dump
+from tests.check_scene_match import verify_scene
+from tests.scenes import trigger_server_dump
 
 
 IS_MAC = sys.platform == "darwin"

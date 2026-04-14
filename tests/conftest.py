@@ -17,6 +17,7 @@ final ``test_failed`` scene automatically.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
@@ -25,6 +26,34 @@ from pathlib import Path
 import asyncvnc
 import pytest
 import pytest_asyncio
+
+
+def _claude_binary() -> str | None:
+    """Return the absolute path to the `claude` CLI binary, or None.
+
+    Looks in ~/.local/bin/ (where the user installs it by default)
+    and falls back to PATH. Used by the `claude_code` marker's
+    auto-skip hook to gate tests that need the real CLI.
+    """
+    home_path = Path.home() / ".local" / "bin" / "claude"
+    if home_path.is_file() and os.access(home_path, os.X_OK):
+        return str(home_path)
+    on_path = shutil.which("claude")
+    if on_path:
+        return on_path
+    return None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip claude_code-marked tests when the binary is missing."""
+    if _claude_binary() is not None:
+        return
+    skip_claude = pytest.mark.skip(
+        reason="claude binary not found on PATH or ~/.local/bin/"
+    )
+    for item in items:
+        if "claude_code" in item.keywords:
+            item.add_marker(skip_claude)
 
 from vncvt.supervisor import (
     VncvtHandle,

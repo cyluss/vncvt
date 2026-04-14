@@ -8,7 +8,7 @@ from PIL import Image
 
 from vncvt.renderer import TerminalRenderer
 
-from .baselines import assert_hash
+from tests.baselines import assert_hash
 
 
 # Font size the CLI uses by default — see ``vncvt/__main__.py``'s

@@ -14,7 +14,7 @@ import asyncio
 
 from PIL import Image
 
-from .helpers import client_cut_text
+from tests.helpers import client_cut_text
 
 
 MARKER = "PASTE_FEATURE_D"
