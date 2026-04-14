@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PIL import Image
 
-DEFAULT_BG = (26, 16, 0)
+DEFAULT_BG = (0, 0, 0)
 PADDING = 5
 
 

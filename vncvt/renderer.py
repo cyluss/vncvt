@@ -7,18 +7,20 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 import pyte
+import skia
 import wcwidth
 
 log = logging.getLogger(__name__)
 
 
-# Amber-tinted ANSI color palette
-# Each standard ANSI color is warm-shifted toward amber phosphor tones
-AMBER_COLORS = {
+# Per-theme 16-color ANSI palettes. The active palette is rebound to
+# AMBER_COLORS by apply_theme() so the existing _resolve_color path
+# (which looks up by name in AMBER_COLORS) picks up theme changes.
+_AMBER_ANSI = {
     "black":         (61, 40, 0),
     "red":           (255, 92, 0),
     "green":         (204, 163, 0),
-    "brown":         (204, 140, 0),
+    "brown":         (255, 200, 40),    # ANSI yellow — brighter amber
     "blue":          (204, 128, 0),
     "magenta":       (255, 122, 61),
     "cyan":          (230, 184, 0),
@@ -26,37 +28,163 @@ AMBER_COLORS = {
     "brightblack":   (102, 72, 10),
     "brightred":     (255, 140, 50),
     "brightgreen":   (255, 210, 50),
-    "brightyellow":  (255, 230, 80),
+    "brightyellow":  (255, 240, 100),   # bright yellow — punchy
     "brightblue":    (230, 170, 50),
     "brightmagenta": (255, 170, 100),
     "brightcyan":    (255, 220, 80),
     "brightwhite":   (255, 240, 170),
 }
 
+# Standard xterm-style palette for non-amber themes.
+_STD_ANSI = {
+    "black":         (0, 0, 0),
+    "red":           (205, 49, 49),
+    "green":         (13, 188, 121),
+    "brown":         (229, 229, 16),    # ANSI yellow
+    "blue":          (36, 114, 200),
+    "magenta":       (188, 63, 188),
+    "cyan":          (17, 168, 205),
+    "white":         (229, 229, 229),
+    "brightblack":   (102, 102, 102),
+    "brightred":     (241, 76, 76),
+    "brightgreen":   (35, 209, 139),
+    "brightyellow":  (245, 245, 67),
+    "brightblue":    (59, 142, 234),
+    "brightmagenta": (214, 112, 214),
+    "brightcyan":    (41, 184, 219),
+    "brightwhite":   (255, 255, 255),
+}
+
+# Light theme uses standard ANSI but swaps a few high-luminance shades
+# down so they're visible on a white background.
+_LIGHT_ANSI = {
+    **_STD_ANSI,
+    "white":         (90, 90, 90),
+    "brightwhite":   (60, 60, 60),
+}
+
+# Green phosphor theme — every ANSI color becomes a shade of green.
+_GREEN_ANSI = {
+    "black":         (0, 30, 10),
+    "red":           (180, 255, 180),
+    "green":         (60, 255, 120),
+    "brown":         (120, 255, 80),
+    "blue":          (40, 200, 100),
+    "magenta":       (200, 255, 160),
+    "cyan":          (100, 255, 180),
+    "white":         (200, 255, 200),
+    "brightblack":   (40, 100, 40),
+    "brightred":     (220, 255, 200),
+    "brightgreen":   (160, 255, 200),
+    "brightyellow":  (200, 255, 100),
+    "brightblue":    (80, 240, 140),
+    "brightmagenta": (220, 255, 200),
+    "brightcyan":    (180, 255, 220),
+    "brightwhite":   (255, 255, 220),
+}
+
+# Active palette — apply_theme() replaces this dict in place so any
+# code holding a reference (including _build_256_palette below) sees
+# the new colors.
+AMBER_COLORS = dict(_AMBER_ANSI)
+
 # pyte uses these names for the 8 basic colors
 _PYTE_COLOR_NAMES = [
     "black", "red", "green", "brown", "blue", "magenta", "cyan", "white",
 ]
 
-DEFAULT_BG = (26, 16, 0)       # #1a1000 — dark amber CRT off-black
-DEFAULT_FG = (255, 156, 0)     # #ff9c00 — warm amber phosphor
-BOLD_FG = (255, 200, 0)        # #ffc800 — brighter amber for bold
-CURSOR_COLOR = (255, 156, 0)   # same as default FG
+# Theme palettes. The active one is installed into the module-level
+# DEFAULT_BG / DEFAULT_FG / BOLD_FG / CURSOR_COLOR constants by
+# ``apply_theme()``; modules like test_padding.py that import
+# DEFAULT_BG directly pick up whatever the current theme set.
+THEMES: dict[str, dict] = {
+    "amber": {
+        "bg":     (0, 0, 0),
+        "fg":     (255, 176, 0),
+        "bold":   (255, 210, 40),
+        "cursor": (255, 176, 0),
+        "ansi":   _AMBER_ANSI,
+    },
+    "light": {  # black on white — highest perceived crispness
+        "bg":     (255, 255, 255),
+        "fg":     (0, 0, 0),
+        "bold":   (0, 0, 0),
+        "cursor": (0, 0, 0),
+        "ansi":   _LIGHT_ANSI,
+    },
+    "dark": {  # white on black — classic
+        "bg":     (0, 0, 0),
+        "fg":     (230, 230, 230),
+        "bold":   (255, 255, 255),
+        "cursor": (230, 230, 230),
+        "ansi":   _STD_ANSI,
+    },
+    "green": {  # classic phosphor green
+        "bg":     (0, 0, 0),
+        "fg":     (60, 255, 120),
+        "bold":   (120, 255, 160),
+        "cursor": (60, 255, 120),
+        "ansi":   _GREEN_ANSI,
+    },
+}
+
+DEFAULT_BG = THEMES["amber"]["bg"]
+DEFAULT_FG = THEMES["amber"]["fg"]
+BOLD_FG = THEMES["amber"]["bold"]
+CURSOR_COLOR = THEMES["amber"]["cursor"]
+
+
+def apply_theme(name: str) -> None:
+    """Install one of the THEMES palettes as the module-level defaults.
+
+    Call before constructing any TerminalRenderer — the render path
+    reads DEFAULT_BG / DEFAULT_FG / BOLD_FG / CURSOR_COLOR at draw
+    time, so swapping them here is enough for a theme change. The
+    16-color ANSI palette is updated in place so existing references
+    in _PALETTE_256 stay current.
+    """
+    if name not in THEMES:
+        raise ValueError(
+            f"unknown theme {name!r}; expected one of {sorted(THEMES)}"
+        )
+    global DEFAULT_BG, DEFAULT_FG, BOLD_FG, CURSOR_COLOR, _PALETTE_256
+    palette = THEMES[name]
+    DEFAULT_BG = palette["bg"]
+    DEFAULT_FG = palette["fg"]
+    BOLD_FG = palette["bold"]
+    CURSOR_COLOR = palette["cursor"]
+    AMBER_COLORS.clear()
+    AMBER_COLORS.update(palette["ansi"])
+    # 256-color palette is built from AMBER_COLORS, so rebuild it
+    _PALETTE_256 = _build_256_palette()
+
+_VENDORED_FONT_DIR = Path(__file__).parent / "fonts"
 
 FONT_SEARCH_PATHS = [
+    # macOS: SF Mono Regular (system font). With Skia's subpixel AA
+    # and LCD filtering, this matches what macOS Terminal.app renders.
+    "/System/Library/Fonts/SFNSMono.ttf",
+    # macOS fallback
+    "/System/Library/Fonts/Menlo.ttc",
+    # Linux fallbacks
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
     "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
-    "/System/Library/Fonts/SFNSMono.ttf",
+    # Vendored Terminus TTF is kept as the ultimate fallback for
+    # environments without any monospace font installed.
+    str(_VENDORED_FONT_DIR / "TerminusTTF-4.49.3.ttf"),
 ]
 
 BOLD_FONT_SEARCH_PATHS = [
+    "/System/Library/Fonts/SFNSMono.ttf",  # has an embedded Bold face
+    "/System/Library/Fonts/Menlo.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeMonoBold.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
+    str(_VENDORED_FONT_DIR / "TerminusTTF-Bold-4.49.3.ttf"),
 ]
 
 
@@ -153,10 +281,12 @@ class TerminalRenderer:
         rows: int = 24,
         font_path: str | None = None,
         font_size: int = 16,
+        line_height: float = 1.0,
     ):
         self.cols = cols
         self.rows = rows
         self.padding = self.PADDING
+        self.line_height = line_height
 
         # Load fonts
         if font_path is None:
@@ -177,14 +307,51 @@ class TerminalRenderer:
             ImageFont.truetype(bold_path, font_size) if bold_path else self.font
         )
 
+        # Skia fonts for actual glyph rasterization. Pillow's fonts
+        # above are kept for getlength() / getmetrics() measurement
+        # only — Skia does the drawing so we get subpixel positioning,
+        # LCD filtering, and stem darkening that Pillow+FreeType doesn't
+        # expose.
+        self._skia_typeface = skia.Typeface.MakeFromFile(font_path)
+        self._skia_typeface_bold = (
+            skia.Typeface.MakeFromFile(bold_path) if bold_path
+            else self._skia_typeface
+        )
+        self._skia_font = skia.Font(self._skia_typeface, font_size)
+        self._skia_font_bold = skia.Font(self._skia_typeface_bold, font_size)
+        for f in (self._skia_font, self._skia_font_bold):
+            f.setSubpixel(True)
+            # Grayscale AA (not LCD subpixel) — amber-on-black has no
+            # blue channel transition, so subpixel rendering produces
+            # red/green fringes that hurt perceived crispness. Plain
+            # gray AA stays out of the way.
+            f.setEdging(skia.Font.Edging.kAntiAlias)
+            f.setHinting(skia.FontHinting.kFull)
+            # Let SF Mono's native TrueType hints drive — they're
+            # hand-tuned by Apple and beat Skia's autohinter.
+            f.setForceAutoHinting(False)
+            f.setLinearMetrics(False)
+            f.setBaselineSnap(True)
+
+        # Baseline offset: Pillow's draw.text anchors glyphs at the
+        # top-left; Skia's drawString anchors at the baseline. Stash
+        # the font's ascent so the call site can pass the baseline
+        # y-coordinate.
+        skia_metrics = self._skia_font.getMetrics()
+        self._skia_baseline = -skia_metrics.fAscent
+
         # Measure character cell using advance width, not ink bbox.
         # getlength() returns the horizontal advance — the correct metric for
         # grid layout in a monospace font.
         self.cell_width = int(round(self.font.getlength("M")))
         ascent, descent = self.font.getmetrics()
-        self.cell_height = ascent + descent
+        font_cell_h = ascent + descent
+        self.cell_height = max(1, int(round(font_cell_h * self.line_height)))
         self._x_offset = 0
-        self._y_offset = 0
+        # Vertically center the glyph inside the expanded cell when
+        # line_height > 1.0 so the extra space is shared above/below.
+        self._y_offset = (self.cell_height - font_cell_h) // 2
+        self._skia_baseline += self._y_offset
 
         # Warn if bold font has a different advance (would cause grid drift).
         if self.font_bold is not self.font:
@@ -202,6 +369,46 @@ class TerminalRenderer:
         # Create framebuffer image (padded by DEFAULT_BG on all sides).
         self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
         self._prev_cursor = (-1, -1)
+
+    def _draw_glyph(
+        self,
+        ch: str,
+        bold: bool,
+        x: int,
+        y: int,
+        fg: tuple[int, int, int],
+        bg: tuple[int, int, int],
+        cell_w: int,
+    ) -> None:
+        """Rasterize one glyph via Skia and paste into self.image.
+
+        Skia gives us subpixel positioning, LCD filtering, and stem
+        darkening that Pillow+FreeType doesn't expose. The tradeoff
+        is one tiny offscreen surface per glyph — acceptable for
+        dirty-row rendering at ~80 chars/row × 30 rows.
+        """
+        w = cell_w
+        h = self.cell_height
+        surface = skia.Surface.MakeRasterN32Premul(w, h)
+        canvas = surface.getCanvas()
+        canvas.clear(skia.ColorSetRGB(*bg))
+        font = self._skia_font_bold if bold else self._skia_font
+        paint = skia.Paint(
+            Color=skia.ColorSetRGB(*fg),
+            AntiAlias=True,
+        )
+        canvas.drawString(ch, 0, self._skia_baseline, font, paint)
+        # Snapshot -> RGBA bytes -> paste into self.image.
+        # skia N32Premul is BGRA on little-endian Apple silicon; use
+        # encodeToData(PNG) if byte-order matters, but for speed we
+        # use peekPixels and swizzle.
+        img_info = skia.ImageInfo.MakeN32Premul(w, h)
+        buf = bytearray(w * h * 4)
+        surface.readPixels(img_info, buf, w * 4, 0, 0)
+        # Skia's N32 is RGBA_8888 on macOS arm64 (and RGBA by default
+        # on most modern builds), so no byte swizzle needed.
+        tile = Image.frombytes("RGBA", (w, h), bytes(buf))
+        self.image.paste(tile, (x, y))
 
     def resize(self, cols: int, rows: int) -> None:
         """Resize the framebuffer to new terminal dimensions."""
@@ -316,47 +523,31 @@ class TerminalRenderer:
                 cells = 2 if w == 2 else 1
                 cell_px = self.cell_width * cells
 
-                # Combining mark: overlay on previous cell without touching bg.
+                # Combining mark: overlay on previous cell. For now
+                # we just draw it over the previous cell's bg — Skia
+                # doesn't support stacking marks trivially. Acceptable
+                # since combining marks are rare in terminal output.
                 if w == 0 and col > 0 and ch:
-                    font = self.font_bold if char.bold else self.font
                     prev_x = (col - 1) * self.cell_width + pad
-                    draw.text(
-                        (prev_x + self._x_offset, y + self._y_offset),
-                        ch, font=font, fill=fg,
+                    self._draw_glyph(
+                        ch, char.bold, prev_x, y, fg, DEFAULT_BG,
+                        self.cell_width,
                     )
                     continue
 
-                # Draw cell background if not default.
-                if bg != DEFAULT_BG:
+                # Draw the cell: background + glyph in one Skia pass.
+                # _draw_glyph fills bg first then draws the glyph, so
+                # we don't need a separate rectangle clear.
+                if ch and ch != " ":
+                    self._draw_glyph(
+                        ch, char.bold, x, y, fg, bg, cell_px,
+                    )
+                elif bg != DEFAULT_BG:
+                    # Empty cell with a non-default background.
                     draw.rectangle(
                         [x, y, x + cell_px - 1, y + self.cell_height - 1],
                         fill=bg,
                     )
-
-                # Draw character with overflow clipping.
-                if ch and ch != " ":
-                    font = self.font_bold if char.bold else self.font
-                    glyph_adv = int(round(font.getlength(ch)))
-                    if glyph_adv > cell_px:
-                        # Glyph wider than its cell: render to a temp RGBA
-                        # image and paste cropped to the cell bounds.
-                        tmp = Image.new(
-                            "RGBA",
-                            (glyph_adv + 4, self.cell_height),
-                            (0, 0, 0, 0),
-                        )
-                        tdraw = ImageDraw.Draw(tmp)
-                        tdraw.text(
-                            (self._x_offset, self._y_offset),
-                            ch, font=font, fill=fg + (255,),
-                        )
-                        cropped = tmp.crop((0, 0, cell_px, self.cell_height))
-                        self.image.paste(cropped, (x, y), cropped)
-                    else:
-                        draw.text(
-                            (x + self._x_offset, y + self._y_offset),
-                            ch, font=font, fill=fg,
-                        )
 
                 # Underline
                 if char.underscore:
