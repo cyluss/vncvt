@@ -40,49 +40,46 @@ MAC_THRESHOLDS = dict(ssim_min=0.70, bhat_max=0.50, min_std=3.0)
 # ---------------------------------------------------------------------------
 
 
-@contextmanager
-def vncdo_driver(host: str, port: int, capture_path: Path) -> Iterator[Path]:
-    """Drive the server with vncdotool and capture its framebuffer.
-
-    vncdotool is a one-shot CLI: it connects, runs the requested ops
-    (type/key/capture), exits. The supervisor here is mostly to
-    guarantee the subprocess is gone if anything raises before
-    ``communicate`` returns.
-    """
+def _run_vncdo(host: str, port: int, *ops: str) -> None:
+    """Run one vncdotool invocation with the given ops."""
+    args = [
+        "uv", "run", "--with", "vncdotool", "vncdo",
+        "-s", f"{host}::{port}",
+        *ops,
+    ]
     proc = subprocess.Popen(
-        [
-            "uv", "run", "--with", "vncdotool", "vncdo",
-            "-s", f"{host}::{port}",
-            "type", "echo loopback_works",
-            "key", "enter",
-            "capture", str(capture_path),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     try:
-        try:
-            _out, err = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            _out, err = proc.communicate()
-            raise RuntimeError(f"vncdo timed out after 30s: {err.decode()}")
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"vncdo exited {proc.returncode}: {err.decode()}"
-            )
-        if not capture_path.exists():
-            raise RuntimeError(
-                f"vncdo reported success but {capture_path} is missing"
-            )
-        yield capture_path
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        _out, err = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _out, err = proc.communicate()
+        raise RuntimeError(f"vncdo timed out after 30s: {err.decode()}")
+    if proc.returncode != 0:
+        raise RuntimeError(f"vncdo exited {proc.returncode}: {err.decode()}")
+
+
+def vncdo_type_and_enter(host: str, port: int) -> None:
+    """First vncdo leg: type the command + press Enter, no capture.
+
+    Separated from the capture step so the caller can trigger the
+    server-side scene dump between type-enter and capture. Without
+    this ordering the server dump races the client capture: vncdo
+    captures the framebuffer milliseconds after pressing Enter, before
+    bash has rendered its echo output, so the server's "typed" dump
+    and the client PNG disagree on content.
+    """
+    _run_vncdo(host, port, "type", "echo loopback_works", "key", "enter")
+
+
+def vncdo_capture(host: str, port: int, capture_path: Path) -> None:
+    """Second vncdo leg: capture the current framebuffer to a PNG."""
+    _run_vncdo(host, port, "capture", str(capture_path))
+    if not capture_path.exists():
+        raise RuntimeError(
+            f"vncdo reported success but {capture_path} is missing"
+        )
 
 
 def _crop_chrome(src: Path, dst: Path) -> None:
@@ -309,10 +306,18 @@ def test_loopback_vncdo():
     scene_root = _stable_scene_root("loopback-linux")
     capture = scene_root / "client.png"
     with vncvt_session(scene_root=scene_root) as srv:
-        with vncdo_driver(srv.host, srv.port, capture):
-            scene_dir = _trigger_dump_sync(srv.control_socket, "loopback")
-            shutil.copy(capture, scene_dir / "scene.client.png")
-            verify_scene(scene_dir, **LINUX_THRESHOLDS)
+        # Type + enter first so bash actually paints the echo output
+        vncdo_type_and_enter(srv.host, srv.port)
+        # Let bash echo + the update loop render a stable frame
+        time.sleep(0.5)
+        # Dump the server's view at this moment — must happen between
+        # the type-enter leg and the client capture leg so both sides
+        # observe the same painted screen.
+        scene_dir = _trigger_dump_sync(srv.control_socket, "loopback")
+        # Now capture the client side
+        vncdo_capture(srv.host, srv.port, capture)
+        shutil.copy(capture, scene_dir / "scene.client.png")
+        verify_scene(scene_dir, **LINUX_THRESHOLDS)
 
 
 @pytest.mark.loopback
