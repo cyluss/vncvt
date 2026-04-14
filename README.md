@@ -33,14 +33,39 @@ uv run vncvt
 ## Options
 
 ```
---port PORT       VNC port (default: 5900)
---host HOST       Listen address (default: 127.0.0.1)
---cols COLS       Terminal columns (default: 80)
---rows ROWS       Terminal rows (default: 24)
---font-size SIZE  Font size in points (default: 16)
---font PATH       Path to a monospace TTF font
---shell SHELL     Shell to run (default: /bin/bash)
+--port PORT         VNC port (default: 5900)
+--host HOST         Listen address (default: 127.0.0.1)
+--cols COLS         Terminal columns (default: 80)
+--rows ROWS         Terminal rows (default: 24)
+--mode MODE         VT220 screen preset: 80x24 or 132x24
+                    (mutually exclusive with --cols/--rows)
+--font-size SIZE    Font size in points (default: 11)
+--font PATH         Path to a monospace TTF font
+--fps N             Framebuffer update rate cap, 1-120 (default: 30)
+--shell SHELL       Shell to run (default: $SHELL)
+--password PW       Enable VNC Authentication. Required for macOS
+                    Screen Sharing.app.
+--info              Print a JSON diagnostic (version, defaults, font
+                    search path) and exit.
 ```
+
+## VT220 SET-UP mode
+
+Press **F3** from any connected client to toggle an in-terminal SET-UP
+overlay modeled on the VT220's hardware configuration screen. Use the
+overlay to change columns, rows, font size, and frame rate without
+restarting the server.
+
+| Key          | Action                                 |
+|--------------|----------------------------------------|
+| `F3`         | Toggle SET-UP mode (cancel if active)  |
+| `Up` / `Down`| Navigate fields                        |
+| `Return`     | Cycle the selected field's value       |
+| `Left`       | Cycle backwards                        |
+| `Escape`     | Apply changes and exit SET-UP          |
+
+Note: F3 no longer reaches the shell while vncvt is running — it's
+always intercepted by SET-UP mode.
 
 ## Examples
 
