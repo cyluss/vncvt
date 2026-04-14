@@ -225,6 +225,12 @@ class RFBServer:
         # _update_loop so a client can't read pixel data from a
         # half-reallocated framebuffer mid-FBU.
         self._resize_lock = asyncio.Lock()
+        # Phase 2: active screen indirection for SET-UP mode overlay.
+        # Points to terminal.screen by default; swaps to setup_screen.screen
+        # when _in_setup is True.
+        self._active_screen = terminal.screen
+        self._in_setup = False
+        self._setup = None  # type: ignore[assignment]
 
     async def start(self) -> None:
         """Start the VNC server, PTY reader, and update loop."""
@@ -238,8 +244,8 @@ class RFBServer:
 
         # Do an initial full render so first client gets content immediately
         all_rows = set(range(self.terminal.rows))
-        self.renderer.render_dirty(self.terminal.screen, all_rows)
-        self.terminal.screen.dirty.clear()
+        self.renderer.render_dirty(self._active_screen, all_rows)
+        self._active_screen.dirty.clear()
 
         loop = asyncio.get_event_loop()
         loop.add_reader(self.terminal.master_fd, self._on_pty_data)
@@ -253,6 +259,14 @@ class RFBServer:
         if data:
             self.terminal.feed(data)
 
+    def _get_and_clear_dirty_rows(self) -> set[int]:
+        """Return dirty rows from the active screen and clear its dirty set."""
+        if self._in_setup and self._setup is not None:
+            dirty = set(self._setup.screen.dirty)
+            self._setup.screen.dirty.clear()
+            return dirty
+        return self.terminal.get_dirty_rows()
+
     async def _update_loop(self) -> None:
         """Periodic loop: render dirty rows and push to clients."""
         while self._running:
@@ -262,19 +276,23 @@ class RFBServer:
             # a concurrent handle_resize cannot reallocate the framebuffer
             # mid-flight. The lock is uncontended in steady state.
             async with self._resize_lock:
-                dirty = self.terminal.get_dirty_rows()
+                dirty = self._get_and_clear_dirty_rows()
                 if not dirty and not self.clients:
                     continue
 
-                selection = self.terminal.selection_normalized()
+                # Selection only applies to the live terminal screen
+                selection = (
+                    None if self._in_setup
+                    else self.terminal.selection_normalized()
+                )
                 rects = []
                 if dirty:
                     rects = self.renderer.render_dirty(
-                        self.terminal.screen, dirty, selection=selection
+                        self._active_screen, dirty, selection=selection
                     )
 
                 # Always update cursor position
-                cursor_rect = self.renderer.render_cursor(self.terminal.screen)
+                cursor_rect = self.renderer.render_cursor(self._active_screen)
                 if cursor_rect:
                     rects.append(cursor_rect)
 
@@ -301,8 +319,8 @@ class RFBServer:
             # Render the whole new framebuffer once so subsequent FBUs
             # have valid pixel data to read.
             all_rows = set(range(rows))
-            self.renderer.render_dirty(self.terminal.screen, all_rows)
-            self.terminal.screen.dirty.clear()
+            self.renderer.render_dirty(self._active_screen, all_rows)
+            self._active_screen.dirty.clear()
 
             new_w = self.renderer.width
             new_h = self.renderer.height
@@ -559,10 +577,15 @@ class RFBClient:
                 data = await self.reader.readexactly(9)
                 incremental = data[0]
                 if not incremental:
-                    # Send full framebuffer
+                    # Send full framebuffer from the active screen (terminal
+                    # or setup overlay)
+                    selection = (
+                        None if self.server._in_setup
+                        else self.server.terminal.selection_normalized()
+                    )
                     fb = self.server.renderer.full_render(
-                        self.server.terminal.screen,
-                        selection=self.server.terminal.selection_normalized(),
+                        self.server._active_screen,
+                        selection=selection,
                     )
                     await self._send_full_update(fb)
                 else:
