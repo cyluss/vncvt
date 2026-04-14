@@ -44,6 +44,10 @@ async def test_paste_renders_as_amber_text(vnc, scene):
             r, g, b = img.getpixel((x, y))
             if r > 200 and 100 < g < 200 and b < 80:
                 amber_pixels += 1
-    assert amber_pixels > 500, (
-        f"expected >500 amber pixels in top band, got {amber_pixels}"
+    # Threshold of 250 comfortably clears the ~320 amber pixels
+    # produced by two lines of echoed text + the prompt at the
+    # default 11pt font. Was 500 before we disabled the zsh session
+    # banner, whose UUID text inflated the top-row pixel count.
+    assert amber_pixels > 250, (
+        f"expected >250 amber pixels in top band, got {amber_pixels}"
     )

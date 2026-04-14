@@ -103,6 +103,14 @@ def start_vncvt(
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     if log_rfb:
         env["VNCVT_LOG_RFB"] = "1"
+    # Suppress zsh session-restore banner so tests get a reproducible
+    # initial prompt. On macOS, zsh login shells dump a line like
+    # "/Users/kang/.zsh_sessions/<UUID>.session:N: command not found:
+    # Saving" before the first prompt — the UUID is machine-specific,
+    # which wrecks dHash-based baseline comparisons across machines.
+    env["SHELL_SESSIONS_DISABLE"] = "1"
+    env["SHELL_SESSION_DIR"] = ""
+    env.pop("SHELL_SESSION_ID", None)
 
     # Stream stderr to a log file under scene_root so the RFB trace
     # (the only diagnostic we have when something goes wrong end-to-
