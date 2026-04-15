@@ -24,7 +24,7 @@ from .scene_dump import SceneDumper, serve_control_socket
 # unknown key in the config file fails loud.
 _CONFIG_KEYS = {
     "host", "port", "cols", "rows", "mode", "font_size", "font",
-    "fps", "theme", "line_height", "shell", "password",
+    "fps", "theme", "line_height", "contrast", "shell", "password",
 }
 
 
@@ -127,8 +127,17 @@ def main() -> None:
              "vertical space between rows; range 0.8-2.0.",
     )
     parser.add_argument(
-        "--fps", type=int, default=cfg("fps", 30),
-        help="Framebuffer update rate cap (default: 30, range: 1-120)",
+        "--contrast", default=cfg("contrast", "high"),
+        choices=("normal", "high", "max"),
+        help="Glyph stroke boldness: normal (kFull hinting, single "
+             "draw), high (kNone hinting + 1px horizontal embolden, "
+             "~2x ink coverage, DEFAULT), max (kNone + 4-corner "
+             "embolden, ~4x ink). Drop to normal if text looks too "
+             "heavy.",
+    )
+    parser.add_argument(
+        "--fps", type=int, default=cfg("fps", 15),
+        help="Framebuffer update rate cap (default: 15, range: 1-120)",
     )
     parser.add_argument(
         "--font", default=cfg("font", None),
@@ -232,6 +241,7 @@ def main() -> None:
         font_path=args.font,
         font_size=args.font_size,
         line_height=args.line_height,
+        contrast=args.contrast,
     )
     server = RFBServer(
         host=args.host,

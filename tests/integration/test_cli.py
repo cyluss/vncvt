@@ -77,7 +77,7 @@ def test_info_prints_json_and_exits():
     assert "defaults" in info
     assert info["defaults"]["cols"] == 80
     assert info["defaults"]["rows"] == 24
-    assert info["defaults"]["fps"] == 30
+    assert info["defaults"]["fps"] == 15
     assert "font_search_path" in info and len(info["font_search_path"]) > 0
     assert "font_found" in info
     # Should not leave anything listening on the default port

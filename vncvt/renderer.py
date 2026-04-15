@@ -293,10 +293,12 @@ class TerminalRenderer:
         font_path: str | None = None,
         font_size: int = 16,
         line_height: float = 1.0,
+        contrast: str = "normal",
     ):
         self.cols = cols
         self.rows = rows
         self.padding = self.PADDING
+        self.contrast = contrast
         self.line_height = line_height
 
         # Load fonts
@@ -380,7 +382,14 @@ class TerminalRenderer:
             # red/green fringes that hurt perceived crispness. Plain
             # gray AA stays out of the way.
             f.setEdging(skia.Font.Edging.kAntiAlias)
-            f.setHinting(skia.FontHinting.kFull)
+            # In high-contrast mode, drop hinting to kNone so glyph
+            # outlines are rasterized without pixel-snap; the resulting
+            # strokes are thicker (1.5-2 px wide instead of hard-snapped
+            # 1 px) and look noticeably brighter at small sizes.
+            f.setHinting(
+                skia.FontHinting.kNone if contrast == "high"
+                else skia.FontHinting.kFull
+            )
             # Let SF Mono's native TrueType hints drive — they're
             # hand-tuned by Apple and beat Skia's autohinter.
             f.setForceAutoHinting(False)
@@ -481,6 +490,20 @@ class TerminalRenderer:
             # bitmap to the fg color, destroying the emoji art.
             paint.setColor(skia.ColorSetRGB(*fg))
         canvas.drawString(ch, 0, self._skia_baseline, font, paint)
+        if not is_color:
+            # Embolden via repeated draws at sub-pixel offsets.
+            # Each extra draw thickens strokes without the jaggies of
+            # 1-bit AA. Skipped for color bitmap emoji (would smear
+            # the sbix bitmap).
+            if self.contrast == "high":
+                # +1 horizontal draw → strokes are ~1.5-2 px wide
+                canvas.drawString(ch, 1, self._skia_baseline, font, paint)
+            elif self.contrast == "max":
+                # Four-corner draw → strokes are ~2 px on all edges,
+                # ~4x the ink coverage of the normal render.
+                canvas.drawString(ch, 1, self._skia_baseline, font, paint)
+                canvas.drawString(ch, 0, self._skia_baseline + 1, font, paint)
+                canvas.drawString(ch, 1, self._skia_baseline + 1, font, paint)
         # Snapshot -> RGBA bytes -> paste into self.image.
         # skia N32Premul is BGRA on little-endian Apple silicon; use
         # encodeToData(PNG) if byte-order matters, but for speed we

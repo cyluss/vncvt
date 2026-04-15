@@ -113,6 +113,11 @@ class SetupScreen:
                 [0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.75, 2.0],
                 initial.get("line_height", 1.0),
             ),
+            _field(
+                "Contrast",
+                ["normal", "high", "max"],
+                initial.get("contrast", "normal"),
+            ),
         ]
         # Readonly info fields
         self.fields.append(
@@ -131,7 +136,7 @@ class SetupScreen:
         )
 
         self.selected = 0  # index into self.fields (editable only)
-        self._editable_count = 6  # first N fields are editable
+        self._editable_count = 7  # first N fields are editable
         self.redraw()
 
     # -------- key handling --------
