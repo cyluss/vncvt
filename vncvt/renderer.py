@@ -635,17 +635,25 @@ class TerminalRenderer:
                 self._skia_fallback_fonts_bold.append(skia.Font(tf, font_size))
                 self._skia_fallback_is_color_bold.append(False)
 
-        apple_emoji = Path("/System/Library/Fonts/Apple Color Emoji.ttc")
-        if apple_emoji.is_file():
-            tf = skia.Typeface.MakeFromFile(str(apple_emoji))
-            if tf is not None:
-                emoji_font = skia.Font(tf, font_size)
-                self._skia_fallback_fonts.append(emoji_font)
-                self._skia_fallback_is_color.append(True)
-                # Bold reuses the same emoji font — color emoji has no
-                # weight axis.
-                self._skia_fallback_fonts_bold.append(emoji_font)
-                self._skia_fallback_is_color_bold.append(True)
+        _emoji_candidates = [
+            # macOS system font (Apple Color Emoji — sbix color bitmaps)
+            Path("/System/Library/Fonts/Apple Color Emoji.ttc"),
+            # Vendored fallback for Linux CI and other non-macOS platforms
+            # (Noto Color Emoji — CBDT/CBLC color bitmaps, OFL 1.1)
+            _VENDORED_FONT_DIR / "NotoColorEmoji.ttf",
+        ]
+        for _emoji_path in _emoji_candidates:
+            if _emoji_path.is_file():
+                tf = skia.Typeface.MakeFromFile(str(_emoji_path))
+                if tf is not None:
+                    emoji_font = skia.Font(tf, font_size)
+                    self._skia_fallback_fonts.append(emoji_font)
+                    self._skia_fallback_is_color.append(True)
+                    # Bold reuses the same emoji font — color emoji has no
+                    # weight axis.
+                    self._skia_fallback_fonts_bold.append(emoji_font)
+                    self._skia_fallback_is_color_bold.append(True)
+                    break
 
         # Apply shared rasterization flags to every fallback font.
         for f in (
