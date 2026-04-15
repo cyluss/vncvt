@@ -3,6 +3,8 @@
 import codecs
 import fcntl
 import os
+import pwd
+import re
 import select
 import signal
 import struct
@@ -41,6 +43,18 @@ class Terminal:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
+        # Look up the invoking user's entry in /etc/passwd so the
+        # shell starts in their $HOME (not wherever vncvt was launched
+        # from) and with a correct USER/LOGNAME. Falls back to the
+        # inherited environment if pwd can't resolve the uid.
+        try:
+            pw = pwd.getpwuid(os.getuid())
+            user_home = pw.pw_dir
+            user_name = pw.pw_name
+        except KeyError:
+            user_home = os.environ.get("HOME") or "/"
+            user_name = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+
         self.pid = os.fork()
         if self.pid == 0:
             # Child process
@@ -55,6 +69,19 @@ class Terminal:
             os.environ["TERM"] = "xterm-256color"
             os.environ["COLUMNS"] = str(cols)
             os.environ["LINES"] = str(rows)
+            # Propagate the passwd-derived HOME/USER/LOGNAME so the
+            # shell sees values that match the real account, and chdir
+            # to $HOME so users don't land in whatever directory vncvt
+            # was started from.
+            if user_home:
+                os.environ["HOME"] = user_home
+                try:
+                    os.chdir(user_home)
+                except OSError:
+                    pass
+            if user_name:
+                os.environ["USER"] = user_name
+                os.environ["LOGNAME"] = user_name
             # Spawn as a login shell (argv[0] prefixed with "-") so the
             # user's profile (~/.bash_profile, ~/.zprofile, /etc/profile)
             # gets sourced — matches what Terminal.app does on macOS and
@@ -80,6 +107,17 @@ class Terminal:
         except OSError:
             return b""
 
+    # Regex to scrub Kitty-keyboard-protocol and other CSI sequences
+    # with the `<` intermediate that pyte's CSI parser mis-handles:
+    # it treats `<` as a parameter byte, so `\x1b[<u` ends up drawing
+    # a literal `u` at the cursor position. The sequences we see from
+    # Claude Code and other modern TUIs are all safe to drop — they're
+    # pop/push keyboard flags and query responses vncvt doesn't
+    # implement anyway. Specifically targets `CSI <...> final` where
+    # `final` is any letter, so CSI-u (kitty), CSI-m (xterm
+    # modifyOtherKeys push/pop), and friends are all absorbed.
+    _CSI_LT_SCRUB = re.compile(r"\x1b\[<[0-9;]*[a-zA-Z]")
+
     def feed(self, data: bytes) -> None:
         """Decode bytes and feed to pyte stream."""
         text = self._decoder.decode(data)
@@ -87,6 +125,7 @@ class Terminal:
             # Any new PTY output cancels an in-progress selection.
             if self.selection_anchor is not None:
                 self.clear_selection()
+            text = self._CSI_LT_SCRUB.sub("", text)
             self.stream.feed(text)
 
     def write(self, data: bytes) -> None:
