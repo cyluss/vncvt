@@ -109,13 +109,15 @@ def replay_cast(
     font_size: int = 13,
     line_height: float = 1.1,
     contrast: str = "high",
-    color_mode: str = "256-color",
+    color_mode: str = "phosphor",
 ) -> ReplayedFrame:
     """Replay ``cast_path`` up to timestamp ``at`` and render one
     framebuffer PNG. ``at`` may be a float (seconds) or ``"end"``.
     ``color_mode`` selects the rendering fidelity tier:
-    ``"monochrome"``, ``"16-color"``, ``"256-color"`` (default), or
-    ``"true-color"``."""
+    ``"phosphor"`` (default, VT220 single-hue), ``"16-color"``
+    (CGA/EGA multi-hue, theme-tinted), ``"256-color"`` (VGA diminished
+    chroma, theme-tinted), or ``"true-color"`` (native xterm + raw RGB
+    passthrough)."""
     cast = load_cast(cast_path)
     apply_theme(theme)
     rend = TerminalRenderer(

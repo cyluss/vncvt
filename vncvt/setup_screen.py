@@ -120,8 +120,8 @@ class SetupScreen:
             ),
             _field(
                 "Color mode",
-                ["monochrome", "16-color", "256-color", "true-color"],
-                initial.get("color_mode", "256-color"),
+                ["phosphor", "16-color", "256-color", "true-color"],
+                initial.get("color_mode", "phosphor"),
             ),
         ]
         # Readonly info fields

@@ -140,16 +140,17 @@ def main() -> None:
     )
     parser.add_argument(
         "--color-mode", dest="color_mode",
-        default=cfg("color_mode", "16-color"),
-        choices=("monochrome", "16-color", "256-color", "true-color"),
-        help="Display color depth, Win95-style. monochrome: single "
-             "theme hue along a luminance ramp (VT220 phosphor). "
-             "16-color: theme's ANSI 0-15 only, truecolor inputs snap "
-             "to nearest (EGA/CGA). 256-color (default): theme's "
-             "OKLCH 256 palette, truecolor inputs go through the "
-             "theme ramp (VGA, theme-tinted). true-color: standard "
-             "xterm 256 palette + raw RGB passthrough — only mode "
-             "that shows Claude Code's native colors.",
+        default=cfg("color_mode", "phosphor"),
+        choices=("phosphor", "16-color", "256-color", "true-color"),
+        help="Color fidelity tier, anchored to a PC display era. "
+             "phosphor (default, VT220/MDA 1981): single-hue theme "
+             "ramp — VT220-faithful, 16 intensity shades. "
+             "16-color (CGA/EGA 1981): 16 theme-biased distinct hues. "
+             "256-color (VGA Mode 13h 1987): theme's CGA 0-15 plus a "
+             "desaturated 216-cube and bg→fg grey ramp. "
+             "true-color (Win95/ISO 8613-6): standard xterm palette + "
+             "raw RGB passthrough — the only mode that shows Claude "
+             "Code's native colors unaltered.",
     )
     parser.add_argument(
         "--fps", type=int, default=cfg("fps", 15),

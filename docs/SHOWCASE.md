@@ -2,7 +2,7 @@
 
 Five built-in themes, each with an OKLCH-generated 16-color ANSI palette at uniform perceived lightness. All clear WCAG AAA at peak contrast; body-text modal contrast clears AA on every theme.
 
-All screenshots capture Claude Code's welcome panel at 80×24, SF Mono 13pt, `line-height 1.1`, `contrast max`, `color-mode 16-color` (the runtime defaults).
+All screenshots capture Claude Code's welcome panel at 80×24, SF Mono 13pt, `line-height 1.1`, `contrast max`, `color-mode phosphor` (the runtime defaults).
 
 ## `amber` — warm amber on black *(default)*
 
@@ -76,20 +76,26 @@ Shares the OKLCH parameters with `dark`, so the 16 ANSI hues are identical in RG
 
 ## Palette taxonomy
 
-| Theme | Family | ANSI palette source |
+Color is picked by two orthogonal knobs: **`--theme`** (aesthetic
+family, bg/fg/hue) and **`--color-mode`** (fidelity tier, how ANSI
+and truecolor inputs map onto that hue family). Each tier is anchored
+to a specific PC display era:
+
+| Tier | Anchor | What it renders |
 |---|---|---|
-| `amber` | Hand-tuned single-hue (phosphor aesthetic) | `_AMBER_ANSI` dict |
-| `green` | Hand-tuned single-hue (phosphor aesthetic) | `_GREEN_ANSI` dict |
-| `light` | OKLCH dark-on-light, low lightness reads as monotone | `_gen_palette(_LIGHT_BG, base_l=0.40, …)` |
-| `dark` | OKLCH bright-on-dark, full-spectrum chromatic | `_gen_palette(_DARK_BG, base_l=0.78, …)` |
-| `powershell` | OKLCH bright-on-navy, full-spectrum chromatic | `_gen_palette(_NAVY_BG, base_l=0.78, …)` |
+| `phosphor` *(default)* | VT220 / MDA / Hercules (1981–83) | Single-hue, 16 intensity shades of the theme's primary hue. Every ANSI slot collapses into the theme's warm/green/navy/grey family — SGR index becomes a brightness cue, not a hue cue. |
+| `16-color` | CGA / EGA (1981 / 1984) | 16 distinct hues (red, green, blue, yellow, magenta, cyan + brights), each rotated up to 30° toward the theme's primary hue. Still recognizably multi-hue, but with a family resemblance to the theme. |
+| `256-color` | VGA Mode 13h (1987) | 256 slots: CGA 16 + xterm 6×6×6 cube (blended 40% toward the theme bg/fg midpoint for diminished chroma) + 24 greys along the theme's OKLab bg→fg axis. Hue intent survives; theme personality still comes through. |
+| `true-color` | Win95 True Color / ISO 8613-6 (1995 / 2012+) | Raw passthrough. ANSI indices resolve via the standard xterm 256 table; 24-bit escapes render as raw RGB for bg (fg still lifted through the OKLab ramp for readability). The only tier where Claude Code's native palette renders faithfully. |
 
-There are effectively **two design families**:
+### Mode × theme matrix
 
-- **Phosphor themes** (`amber`, `green`, `light`) — single-hue or near-monotone. Faithful to the VT220 / Apple //e / newspaper-print aesthetic.
-- **Chromatic themes** (`dark`, `powershell`) — full-spectrum xterm-style palettes. More colors, more modern.
+Every (theme, mode) pair is a valid rendering — 5 themes × 4 tiers = 20 combinations. The default is `phosphor` on `amber`, a software approximation of a 1983 DEC VT220. Switch to `--color-mode true-color` to keep the theme's bg while letting Claude Code's native hues pass through.
 
-Definitions live in [`vncvt/renderer.py` lines 25–140](../vncvt/renderer.py). The OKLCH generator itself is in [`vncvt/oklch.py`](../vncvt/oklch.py).
+See [`docs/design-color.md`](design-color.md) for the full tier
+definitions, OKLCH rationale, and per-theme WCAG measurements.
+
+Theme definitions live in [`vncvt/renderer.py` lines 25–140](../vncvt/renderer.py). The OKLCH generator is in [`vncvt/oklch.py`](../vncvt/oklch.py).
 
 ## Contrast measurement
 

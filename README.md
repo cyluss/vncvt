@@ -70,7 +70,11 @@ Terminal:
 Rendering:
 
 - `--theme NAME` — `amber` (default), `green`, `light`, `dark`, `powershell`
-- `--color-mode MODE` — `monochrome`, `16-color` (default), `256-color`, `true-color`
+- `--color-mode MODE` — historical display tier (default: `phosphor`):
+  `phosphor` (VT220 single-hue, MDA/Hercules),
+  `16-color` (CGA/EGA multi-hue, theme-tinted),
+  `256-color` (VGA diminished chroma, theme-tinted),
+  `true-color` (native xterm + raw RGB)
 - `--contrast LEVEL` — `normal`, `high`, `max` (default). Drop to `normal` on hi-DPI
 - `--font PATH` — TTF font (default: SF Mono → DejaVu → vendored Terminus)
 - `--font-size SIZE` — points (default: 13)

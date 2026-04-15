@@ -129,11 +129,38 @@ def _pick_neutral_l(
     return L
 
 
+def _bias_hue(h: float, bias: str | None) -> float:
+    """Rotate ``h`` (deg) toward a target hue, proportionally to how
+    far away it is. A hue already at the target gets 0° rotation;
+    a hue 180° away gets the full 30° pull. Used to give per-theme
+    CGA palettes a family resemblance without collapsing SGR hue
+    identity.
+    """
+    if bias is None:
+        return h
+    if bias == "warm":
+        target = 30.0
+    elif bias == "cool":
+        target = 210.0
+    elif bias == "green":
+        target = 140.0
+    else:
+        return h
+    # Signed shortest angular distance from h to target, in [-180, 180].
+    delta = ((target - h) + 540.0) % 360.0 - 180.0
+    # Proportional pull: 0 at delta=0, ±30° at |delta|=180.
+    pull = (abs(delta) / 180.0) * 30.0
+    if delta >= 0:
+        return (h + pull) % 360.0
+    return (h - pull) % 360.0
+
+
 def generate_palette(
     bg: tuple[int, int, int],
     base_l: float = 0.78,
     bright_l: float = 0.90,
     chroma: float = 0.17,
+    hue_bias: str | None = None,
 ) -> dict[str, tuple[int, int, int]]:
     """Build a full 16-color ANSI palette at uniform OKLCH lightness.
 
@@ -183,9 +210,10 @@ def generate_palette(
 
     # Chromatic slots: six hues × {base, bright}
     for name, h in ANSI_HUES.items():
-        palette[name] = oklch_to_srgb(neutral_l, chroma, h)
+        h_biased = _bias_hue(h, hue_bias)
+        palette[name] = oklch_to_srgb(neutral_l, chroma, h_biased)
         palette["bright" + ("yellow" if name == "brown" else name)] = (
-            oklch_to_srgb(neutral_bright_l, chroma, h)
+            oklch_to_srgb(neutral_bright_l, chroma, h_biased)
         )
 
     return palette

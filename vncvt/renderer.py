@@ -26,17 +26,20 @@ _DARK_BG = (0, 0, 0)
 _LIGHT_BG = (255, 255, 255)
 _NAVY_BG = (0x01, 0x24, 0x56)
 
-# base_l / bright_l are in Oklab L* (0..1). 0.78 is the WCAG 7:1
-# sweet spot on black bg: vivid enough to be legible, not so bright
-# it bleaches to pastel.
-_STD_ANSI = _gen_palette(_DARK_BG, base_l=0.78, bright_l=0.92, chroma=0.17)
-_LIGHT_ANSI = _gen_palette(_LIGHT_BG, base_l=0.40, bright_l=0.28, chroma=0.17)
-_POWERSHELL_ANSI = _gen_palette(_NAVY_BG, base_l=0.78, bright_l=0.92, chroma=0.17)
+# ---------------------------------------------------------------------------
+# Phosphor palettes — single-hue per theme. Used by `phosphor` color
+# mode (the default). Each palette has all 16 SGR slots but every slot
+# is a *brightness* variant of the theme's primary hue — the SGR
+# index becomes a luminance cue, not a chroma cue. This is the VT220
+# / MDA aesthetic: everything is amber (or green, or grey, or cyan).
+#
+# Slot 0 ("black") is *near-bg* by design, so it legitimately fails
+# the 3:1 contrast floor the other 15 slots clear. See design-color.md.
+# ---------------------------------------------------------------------------
 
-# Amber theme keeps the hand-tuned warm-shifted palette for its
-# "everything is amber" aesthetic (the OKLCH generator would pick
-# regular red/green/blue which defeats the point).
-_AMBER_ANSI = {
+# Amber phosphor — preserved from the original vncvt release.
+# Invariant: r >= g >= b (warmth).
+_AMBER_PHOSPHOR = {
     "black":         (60, 40, 0),
     "red":           (255, 120, 60),
     "green":         (220, 200, 80),
@@ -55,8 +58,8 @@ _AMBER_ANSI = {
     "brightwhite":   (255, 240, 180),
 }
 
-# Green phosphor — everything is a shade of green, hand-tuned.
-_GREEN_ANSI = {
+# Green phosphor — preserved. Invariant: g >= {r, b}.
+_GREEN_PHOSPHOR = {
     "black":         (0, 30, 10),
     "red":           (180, 255, 180),
     "green":         (60, 255, 120),
@@ -75,10 +78,99 @@ _GREEN_ANSI = {
     "brightwhite":   (255, 255, 220),
 }
 
+# Light phosphor — dark-grey ink-on-paper. Invariant: r == g == b.
+# All slots clear WCAG 5:1+ on white bg.
+_LIGHT_PHOSPHOR = {
+    "black":         (0, 0, 0),
+    "red":           (80, 80, 80),
+    "green":         (70, 70, 70),
+    "brown":         (60, 60, 60),
+    "blue":          (50, 50, 50),
+    "magenta":       (90, 90, 90),
+    "cyan":          (75, 75, 75),
+    "white":         (40, 40, 40),
+    "brightblack":   (110, 110, 110),
+    "brightred":     (65, 65, 65),
+    "brightgreen":   (55, 55, 55),
+    "brightyellow":  (45, 45, 45),
+    "brightblue":    (35, 35, 35),
+    "brightmagenta": (80, 80, 80),
+    "brightcyan":    (60, 60, 60),
+    "brightwhite":   (20, 20, 20),
+}
+
+# Dark phosphor — light-grey VT100 aesthetic. Invariant: r == g == b.
+# Slot 0 (black) is near-bg by design; other 15 clear WCAG 6:1+.
+_DARK_PHOSPHOR = {
+    "black":         (20, 20, 20),
+    "red":           (180, 180, 180),
+    "green":         (190, 190, 190),
+    "brown":         (200, 200, 200),
+    "blue":          (210, 210, 210),
+    "magenta":       (170, 170, 170),
+    "cyan":          (185, 185, 185),
+    "white":         (220, 220, 220),
+    "brightblack":   (140, 140, 140),
+    "brightred":     (200, 200, 200),
+    "brightgreen":   (215, 215, 215),
+    "brightyellow":  (225, 225, 225),
+    "brightblue":    (230, 230, 230),
+    "brightmagenta": (195, 195, 195),
+    "brightcyan":    (210, 210, 210),
+    "brightwhite":   (255, 255, 255),
+}
+
+# Powershell phosphor — cyan/blue family on navy #012456.
+# Invariant: b >= g >= r (cool cast). Slot 0 is near-bg; other 15
+# clear ~4.85:1+.
+_POWERSHELL_PHOSPHOR = {
+    "black":         (20, 55, 110),
+    "red":           (140, 190, 225),
+    "green":         (120, 175, 215),
+    "brown":         (130, 185, 220),
+    "blue":          (115, 170, 215),
+    "magenta":       (150, 200, 230),
+    "cyan":          (160, 205, 235),
+    "white":         (200, 225, 245),
+    "brightblack":   (100, 150, 200),
+    "brightred":     (165, 210, 240),
+    "brightgreen":   (175, 215, 240),
+    "brightyellow":  (180, 220, 245),
+    "brightblue":    (160, 210, 240),
+    "brightmagenta": (190, 225, 250),
+    "brightcyan":    (195, 230, 250),
+    "brightwhite":   (225, 245, 255),
+}
+
+# ---------------------------------------------------------------------------
+# CGA palettes — 16 distinct hues, theme-biased. Used by `16-color`
+# and `256-color` color modes. OKLCH-generated at uniform perceived
+# L*, with a ±30° hue rotation toward the theme's primary hue to
+# give the palette a family resemblance.
+# ---------------------------------------------------------------------------
+
+# Neutral CGA bases (light/dark/powershell) — no hue bias; the theme
+# bg picks "light" vs "dark" variant inside generate_palette.
+_DARK_CGA = _gen_palette(_DARK_BG, base_l=0.78, bright_l=0.92, chroma=0.17)
+_LIGHT_CGA = _gen_palette(_LIGHT_BG, base_l=0.40, bright_l=0.28, chroma=0.17)
+_POWERSHELL_CGA = _gen_palette(
+    _NAVY_BG, base_l=0.78, bright_l=0.92, chroma=0.17, hue_bias="cool",
+)
+
+# Amber/green CGA palettes keep 16 recognizably distinct hues but
+# biased toward the theme's primary hue so they feel on-family.
+_AMBER_CGA = _gen_palette(
+    _DARK_BG, base_l=0.78, bright_l=0.92, chroma=0.13, hue_bias="warm",
+)
+_GREEN_CGA = _gen_palette(
+    _DARK_BG, base_l=0.78, bright_l=0.92, chroma=0.13, hue_bias="green",
+)
+
 # Active palette — apply_theme() replaces this dict in place so any
-# code holding a reference (including _build_256_palette below) sees
-# the new colors.
-AMBER_COLORS = dict(_AMBER_ANSI)
+# code holding a reference (including the 256-color builders below)
+# sees the new colors. AMBER_COLORS is kept as a back-compat alias
+# and points at the *phosphor* palette since that's the default mode.
+AMBER_COLORS = dict(_AMBER_PHOSPHOR)
 
 # pyte uses these names for the 8 basic colors
 _PYTE_COLOR_NAMES = [
@@ -98,44 +190,48 @@ _NO_UNDERLINE = frozenset(
 # ``apply_theme()``; modules like test_padding.py that import
 # DEFAULT_BG directly pick up whatever the current theme set.
 THEMES: dict[str, dict] = {
-    # All themes clear WCAG AAA (7:1); light/dark are at the 21:1 max.
-    # Amber and green are capped by the need to preserve hue identity
-    # — pushing a saturated hue past ~16:1 starts bleaching it toward
-    # yellow or mint, which is neither amber nor phosphor green.
+    # Each theme has two 16-slot palettes: `ansi_phosphor` (single-hue
+    # aesthetic for `phosphor` mode) and `ansi_cga` (theme-biased 16
+    # distinct hues for `16-color` and `256-color` modes).
     "amber": {
-        "bg":     (0, 0, 0),
-        "fg":     (255, 190, 80),  # 12.73:1, warmer/orangy amber
-        "bold":   (255, 220, 120), # ~14.5:1, brighter peach-amber for bold
-        "cursor": (255, 190, 80),
-        "ansi":   _AMBER_ANSI,
+        "bg":            (0, 0, 0),
+        "fg":            (255, 190, 80),  # 12.73:1, warmer/orangy amber
+        "bold":          (255, 220, 120), # ~14.5:1 peach-amber for bold
+        "cursor":        (255, 190, 80),
+        "ansi_phosphor": _AMBER_PHOSPHOR,
+        "ansi_cga":      _AMBER_CGA,
     },
     "light": {  # black on white — 21.00:1 (WCAG max)
-        "bg":     (255, 255, 255),
-        "fg":     (0, 0, 0),
-        "bold":   (0, 0, 0),
-        "cursor": (0, 0, 0),
-        "ansi":   _LIGHT_ANSI,
+        "bg":            (255, 255, 255),
+        "fg":            (0, 0, 0),
+        "bold":          (0, 0, 0),
+        "cursor":        (0, 0, 0),
+        "ansi_phosphor": _LIGHT_PHOSPHOR,
+        "ansi_cga":      _LIGHT_CGA,
     },
     "dark": {  # pure white on black — 21.00:1 (WCAG max)
-        "bg":     (0, 0, 0),
-        "fg":     (255, 255, 255),
-        "bold":   (255, 255, 255),
-        "cursor": (255, 255, 255),
-        "ansi":   _STD_ANSI,
+        "bg":            (0, 0, 0),
+        "fg":            (255, 255, 255),
+        "bold":          (255, 255, 255),
+        "cursor":        (255, 255, 255),
+        "ansi_phosphor": _DARK_PHOSPHOR,
+        "ansi_cga":      _DARK_CGA,
     },
-    "green": {  # bright phosphor green — 16.31:1, keeps green hue
-        "bg":     (0, 0, 0),
-        "fg":     (120, 255, 120),
-        "bold":   (180, 255, 180),
-        "cursor": (120, 255, 120),
-        "ansi":   _GREEN_ANSI,
+    "green": {  # bright phosphor green — 16.31:1
+        "bg":            (0, 0, 0),
+        "fg":            (120, 255, 120),
+        "bold":          (180, 255, 180),
+        "cursor":        (120, 255, 120),
+        "ansi_phosphor": _GREEN_PHOSPHOR,
+        "ansi_cga":      _GREEN_CGA,
     },
     "powershell": {  # Windows PowerShell classic — 12.97:1
-        "bg":     (0x01, 0x24, 0x56),  # #012456 dark navy
-        "fg":     (0xEE, 0xED, 0xF0),  # #EEEDF0 off-white
-        "bold":   (0xFF, 0xFF, 0xFF),  # pure white for bold
-        "cursor": (0xEE, 0xED, 0xF0),
-        "ansi":   _POWERSHELL_ANSI,
+        "bg":            (0x01, 0x24, 0x56),  # #012456 dark navy
+        "fg":            (0xEE, 0xED, 0xF0),  # #EEEDF0 off-white
+        "bold":          (0xFF, 0xFF, 0xFF),  # pure white for bold
+        "cursor":        (0xEE, 0xED, 0xF0),
+        "ansi_phosphor": _POWERSHELL_PHOSPHOR,
+        "ansi_cga":      _POWERSHELL_CGA,
     },
 }
 
@@ -150,24 +246,31 @@ def apply_theme(name: str) -> None:
 
     Call before constructing any TerminalRenderer — the render path
     reads DEFAULT_BG / DEFAULT_FG / BOLD_FG / CURSOR_COLOR at draw
-    time, so swapping them here is enough for a theme change. The
-    16-color ANSI palette is updated in place so existing references
-    in _PALETTE_256 stay current.
+    time, so swapping them here is enough for a theme change. Three
+    256-slot palette tables are rebuilt (phosphor, CGA, diminished)
+    so _resolve_color can pick the right one based on color_mode.
     """
     if name not in THEMES:
         raise ValueError(
             f"unknown theme {name!r}; expected one of {sorted(THEMES)}"
         )
-    global DEFAULT_BG, DEFAULT_FG, BOLD_FG, CURSOR_COLOR, _PALETTE_256
+    global DEFAULT_BG, DEFAULT_FG, BOLD_FG, CURSOR_COLOR
+    global _PALETTE_PHOSPHOR, _PALETTE_CGA, _PALETTE_256_DIMINISHED
     palette = THEMES[name]
     DEFAULT_BG = palette["bg"]
     DEFAULT_FG = palette["fg"]
     BOLD_FG = palette["bold"]
     CURSOR_COLOR = palette["cursor"]
+    _PALETTE_PHOSPHOR = _build_256_from_ansi16(palette["ansi_phosphor"])
+    _PALETTE_CGA = _build_256_from_ansi16(palette["ansi_cga"])
+    _PALETTE_256_DIMINISHED = _build_256_diminished(
+        palette["ansi_cga"], palette["bg"], palette["fg"],
+    )
+    # Back-compat: AMBER_COLORS used to hold the "current ANSI palette";
+    # keep it pointing at the phosphor palette since phosphor is the
+    # default color mode.
     AMBER_COLORS.clear()
-    AMBER_COLORS.update(palette["ansi"])
-    # 256-color palette is built from AMBER_COLORS, so rebuild it
-    _PALETTE_256 = _build_256_palette()
+    AMBER_COLORS.update(palette["ansi_phosphor"])
 
 _VENDORED_FONT_DIR = Path(__file__).parent / "fonts"
 
@@ -215,47 +318,128 @@ def _find_font(paths: list[str]) -> str | None:
     return None
 
 
-# 256-color palette (indices 0-255) mapped to amber-tinted RGB.
-# 0-7: standard, 8-15: bright, 16-231: 6x6x6 color cube, 232-255: grayscale
-def _build_256_palette() -> list[tuple[int, int, int]]:
+# 256-color palette builders. Three tables get built per theme:
+#
+#   _PALETTE_PHOSPHOR       — ANSI 0-15 = theme's phosphor dict,
+#                             cube 16-231 and grey 232-255 built from
+#                             the same hand-tuned dict so everything
+#                             stays single-hue (for `phosphor` mode).
+#   _PALETTE_CGA            — ANSI 0-15 = theme's CGA dict, cube and
+#                             grey built from it (for `16-color`
+#                             integer-index lookups, where the user
+#                             asked for 16 distinct hues).
+#   _PALETTE_256_DIMINISHED — ANSI 0-15 from CGA dict; cube 16-231 is
+#                             xterm 6x6x6 desaturated 40% toward the
+#                             theme's bg/fg midpoint; grey 232-255
+#                             interpolates along the bg→fg OKLab axis
+#                             (for `256-color` mode — see design doc).
+_BRIGHT_MAP = {
+    "black": "brightblack", "red": "brightred", "green": "brightgreen",
+    "brown": "brightyellow", "blue": "brightblue", "magenta": "brightmagenta",
+    "cyan": "brightcyan", "white": "brightwhite",
+}
+
+
+def _build_256_from_ansi16(
+    ansi16: dict[str, tuple[int, int, int]],
+) -> list[tuple[int, int, int]]:
+    """Build a 256-slot palette from a 16-slot SGR dict.
+
+    Slots 0-15 come from the dict verbatim; slots 16-231 are the
+    xterm 6x6x6 cube blended 60/40 toward the dict's white entry so
+    it stays on-theme; slots 232-255 are a grey ramp interpolated
+    between the dict's black and white slots.
+    """
     palette: list[tuple[int, int, int]] = []
-    # 0-7 standard
     for name in _PYTE_COLOR_NAMES:
-        palette.append(AMBER_COLORS[name])
-    # 8-15 bright
-    _BRIGHT_MAP = {
-        "black": "brightblack", "red": "brightred", "green": "brightgreen",
-        "brown": "brightyellow", "blue": "brightblue", "magenta": "brightmagenta",
-        "cyan": "brightcyan", "white": "brightwhite",
-    }
+        palette.append(ansi16[name])
     for name in _PYTE_COLOR_NAMES:
-        palette.append(AMBER_COLORS[_BRIGHT_MAP[name]])
-    # 16-231: 6x6x6 color cube — amber tint by warming each color
-    _levels = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
-    for r_idx in range(6):
-        for g_idx in range(6):
-            for b_idx in range(6):
-                r, g, b = _levels[r_idx], _levels[g_idx], _levels[b_idx]
-                # Compute luminance, then map to amber intensity
-                lum = (r * 299 + g * 587 + b * 114) / 1000
-                # Blend: keep some original hue, shift toward amber
-                ar = int(r * 0.4 + lum * 0.6 * 255 / 255)
-                ag = int(g * 0.2 + lum * 0.5 * 156 / 255)
-                ab = int(b * 0.1 + lum * 0.1 * 50 / 255)
-                palette.append((min(ar, 255), min(ag, 255), min(ab, 255)))
-    # 232-255: grayscale ramp — map to amber intensity ramp
+        palette.append(ansi16[_BRIGHT_MAP[name]])
+    tint = ansi16["white"]
+    levels = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
+    for r in levels:
+        for g in levels:
+            for b in levels:
+                # Mix each cube entry toward the theme's peak hue so
+                # the result stays inside the theme family. 60/40 is
+                # the same ratio used by `_build_256_diminished`.
+                cr = int(r * 0.6 + tint[0] * 0.4)
+                cg = int(g * 0.6 + tint[1] * 0.4)
+                cb = int(b * 0.6 + tint[2] * 0.4)
+                palette.append((
+                    max(0, min(255, cr)),
+                    max(0, min(255, cg)),
+                    max(0, min(255, cb)),
+                ))
+    black = ansi16["black"]
+    white = ansi16["brightwhite"]
     for i in range(24):
-        v = 8 + i * 10  # 8 to 238
-        ratio = v / 255
+        t = i / 23.0
         palette.append((
-            int(255 * ratio),
-            int(156 * ratio),
-            int(0),
+            int(black[0] + (white[0] - black[0]) * t),
+            int(black[1] + (white[1] - black[1]) * t),
+            int(black[2] + (white[2] - black[2]) * t),
         ))
     return palette
 
 
-_PALETTE_256 = _build_256_palette()
+def _build_256_diminished(
+    ansi16: dict[str, tuple[int, int, int]],
+    bg: tuple[int, int, int],
+    fg: tuple[int, int, int],
+) -> list[tuple[int, int, int]]:
+    """Build the `256-color` tier palette: CGA ANSI 0-15, a desaturated
+    xterm cube 16-231 (60/40 blend toward the bg/fg midpoint), and a
+    greyscale ramp 232-255 interpolated along the bg→fg OKLab L* axis.
+
+    See design-color.md — this is the "VGA Mode 13h" tier: more
+    gradation than CGA, less chroma than truecolor, still on-theme.
+    """
+    from .oklch import oklab_to_srgb, srgb_to_oklab
+
+    palette: list[tuple[int, int, int]] = []
+    # 0-15: CGA slots verbatim.
+    for name in _PYTE_COLOR_NAMES:
+        palette.append(ansi16[name])
+    for name in _PYTE_COLOR_NAMES:
+        palette.append(ansi16[_BRIGHT_MAP[name]])
+    # 16-231: xterm cube desaturated 40% toward the bg/fg midpoint.
+    mid = (
+        (bg[0] + fg[0]) // 2,
+        (bg[1] + fg[1]) // 2,
+        (bg[2] + fg[2]) // 2,
+    )
+    levels = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
+    for r in levels:
+        for g in levels:
+            for b in levels:
+                cr = int(r * 0.6 + mid[0] * 0.4)
+                cg = int(g * 0.6 + mid[1] * 0.4)
+                cb = int(b * 0.6 + mid[2] * 0.4)
+                palette.append((
+                    max(0, min(255, cr)),
+                    max(0, min(255, cg)),
+                    max(0, min(255, cb)),
+                ))
+    # 232-255: 24-step grey ramp along the bg→fg OKLab L* axis.
+    bg_L, bg_a, bg_b = srgb_to_oklab(*bg)
+    fg_L, fg_a, fg_b = srgb_to_oklab(*fg)
+    for i in range(24):
+        t = i / 23.0
+        L = bg_L + (fg_L - bg_L) * t
+        a = bg_a + (fg_a - bg_a) * t
+        bb = bg_b + (fg_b - bg_b) * t
+        palette.append(oklab_to_srgb(L, a, bb))
+    return palette
+
+
+# Module-level palette tables. apply_theme() rebuilds these whenever
+# the theme changes.
+_PALETTE_PHOSPHOR = _build_256_from_ansi16(_AMBER_PHOSPHOR)
+_PALETTE_CGA = _build_256_from_ansi16(_AMBER_CGA)
+_PALETTE_256_DIMINISHED = _build_256_diminished(
+    _AMBER_CGA, (0, 0, 0), (255, 190, 80),
+)
 
 
 # Standard xterm 256-color palette — NOT theme-tinted. Used by
@@ -384,7 +568,7 @@ class TerminalRenderer:
         font_size: int = 16,
         line_height: float = 1.0,
         contrast: str = "normal",
-        color_mode: str = "256-color",
+        color_mode: str = "phosphor",
     ):
         self.cols = cols
         self.rows = rows
@@ -647,32 +831,28 @@ class TerminalRenderer:
         ):
             idx = int(color)
             if 0 <= idx < 256:
-                if self.color_mode == "monochrome":
-                    r, g, b = _STANDARD_PALETTE_256[idx]
-                    return self._apply_oklab_ramp(
-                        r, g, b, is_bg=is_bg, cell_bg=cell_bg,
-                    )
+                if self.color_mode == "phosphor":
+                    # Single-hue theme ramp: every SGR index collapses
+                    # to a brightness variant of the theme hue.
+                    return _PALETTE_PHOSPHOR[idx]
                 if self.color_mode == "16-color":
-                    wrapped = _PALETTE_256[idx % 16]
+                    wrapped = _PALETTE_CGA[idx % 16]
                     if is_bg or cell_bg is None:
                         return wrapped
                     if _wcag_contrast(wrapped, cell_bg) >= 3.0:
                         return wrapped
-                    # fg: fall back to the 16-color palette extended
-                    # with the theme fg/bg poles so a readable option
-                    # always exists. Needed for non-default cell bgs
-                    # like Claude Code's #eeeeee status bar on light
-                    # theme, where none of the 16 tinted entries are
-                    # far enough from the bg.
+                    # fg: fall back to the 16-color CGA palette
+                    # extended with the theme fg/bg poles so a
+                    # readable option always exists.
                     return _snap_to_palette_readable(
                         wrapped,
-                        list(_PALETTE_256[:16]) + [DEFAULT_FG, DEFAULT_BG],
+                        list(_PALETTE_CGA[:16]) + [DEFAULT_FG, DEFAULT_BG],
                         cell_bg,
                     )
                 if self.color_mode == "true-color":
                     return _STANDARD_PALETTE_256[idx]
-                # default "256-color": theme's OKLCH palette
-                return _PALETTE_256[idx]
+                # default "256-color": theme's diminished VGA palette
+                return _PALETTE_256_DIMINISHED[idx]
 
         # 6-char hex string (truecolor). We route it through the
         # current theme's DEFAULT_BG → DEFAULT_FG ramp using
@@ -692,14 +872,15 @@ class TerminalRenderer:
                 ramp_rgb = self._apply_oklab_ramp(
                     r, g, b, is_bg=is_bg, cell_bg=cell_bg,
                 )
-                if self.color_mode == "monochrome":
+                if self.color_mode == "phosphor":
+                    # Collapse to the theme's single-hue ramp.
                     return ramp_rgb
                 if self.color_mode == "16-color":
                     if is_bg:
-                        return _snap_to_palette(raw_rgb, _PALETTE_256[:16])
+                        return _snap_to_palette(raw_rgb, _PALETTE_CGA[:16])
                     return _snap_to_palette_readable(
                         raw_rgb,
-                        list(_PALETTE_256[:16]) + [DEFAULT_FG, DEFAULT_BG],
+                        list(_PALETTE_CGA[:16]) + [DEFAULT_FG, DEFAULT_BG],
                         cell_bg,
                     )
                 if self.color_mode == "true-color":

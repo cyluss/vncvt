@@ -1,15 +1,15 @@
 """Tests for the ``color_mode`` parameter wired through
 ``replay_cast`` (Track C of the luminous-booping-rainbow plan).
 
-The four tiers are the Win95-display-properties-inspired set:
+The four tiers are the historical display tiers:
 
-- ``monochrome``   — single-hue VT220 phosphor ramp, no palette
-- ``16-color``     — theme-tinted ANSI 16 + nearest snap
-- ``256-color``    — full theme OKLCH 256 palette (default)
-- ``true-color``   — standard xterm palette + raw truecolor
+- ``phosphor``    — single-hue VT220/MDA/Hercules ramp (default)
+- ``16-color``    — CGA/EGA 16 hues, theme-tinted
+- ``256-color``   — VGA diminished-chroma 256 palette, theme-tinted
+- ``true-color``  — standard xterm palette + raw truecolor passthrough
 
-Only ``true-color`` renders Claude Code's native palette; the
-other three are theme-tinted at varying fidelity.
+Only ``true-color`` renders Claude Code's native palette faithfully;
+the other three are theme-tinted at varying fidelity.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisib
 
 
 @pytest.mark.parametrize(
-    "mode", ["monochrome", "16-color", "256-color", "true-color"]
+    "mode", ["phosphor", "16-color", "256-color", "true-color"]
 )
 @pytest.mark.parametrize(
     "theme", ["light", "dark", "amber", "green", "powershell"]
@@ -58,9 +58,10 @@ def test_standard_palette_256_shape():
 
 def test_true_color_and_256color_differ_on_amber():
     """``true-color`` uses the standard xterm palette for ANSI input
-    while ``256-color`` uses the theme's OKLCH-tinted 256 palette.
-    On the amber theme these must produce visibly different output
-    because the theme palette has been re-hue'd toward warm amber."""
+    while ``256-color`` uses the theme's warm-biased VGA palette with
+    diminished chroma. On the amber theme these must produce visibly
+    different output because the 256-color palette has each cube
+    entry blended toward the theme bg/fg midpoint."""
     tc = replay_cast(FIXTURE, theme="amber", color_mode="true-color")
     tt = replay_cast(FIXTURE, theme="amber", color_mode="256-color")
     tc_bytes = tc.image.convert("RGB").tobytes()
@@ -72,21 +73,21 @@ def test_true_color_and_256color_differ_on_amber():
     )
 
 
-def test_monochrome_collapses_hues_on_amber():
-    """Monochrome on the amber theme should map every cell through
-    the amber bg→fg ramp, so no pixel should be blue-dominant.
-    Claude Code emits some cool ANSI hues that the theme's OKLCH
-    256-color palette renders with a slight blue tilt; under
-    monochrome they must collapse onto the warm amber axis.
+def test_phosphor_collapses_hues_on_amber():
+    """Phosphor on the amber theme should map every cell through the
+    amber single-hue ramp, so no pixel should be blue-dominant.
+    Claude Code emits some cool ANSI hues that the theme's 256-color
+    palette renders with a slight blue tilt; under phosphor they must
+    collapse onto the warm amber axis.
 
     Allow a small slack for AA edge artifacts."""
-    frame = replay_cast(FIXTURE, theme="amber", color_mode="monochrome")
+    frame = replay_cast(FIXTURE, theme="amber", color_mode="phosphor")
     raw = frame.image.convert("RGB").tobytes()
     blue_dominant = sum(
         1 for i in range(0, len(raw), 3)
         if raw[i + 2] > raw[i] and raw[i + 2] > raw[i + 1]
     )
     assert blue_dominant < 10, (
-        f"monochrome amber should have no blue-dominant pixels, "
+        f"phosphor amber should have no blue-dominant pixels, "
         f"but found {blue_dominant}"
     )
