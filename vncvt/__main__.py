@@ -241,6 +241,7 @@ def main() -> None:
         password=args.password,
         log_traffic=args.log_traffic,
         fps=args.fps,
+        theme=args.theme,
     )
 
     if bool(args.scene_dump_dir) != bool(args.scene_control_socket):

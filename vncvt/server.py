@@ -211,6 +211,7 @@ class RFBServer:
         password: str | None = None,
         log_traffic: bool = False,
         fps: int = 30,
+        theme: str = "amber",
     ):
         self.host = host
         self.port = port
@@ -219,6 +220,12 @@ class RFBServer:
         self.password = password
         self.log_traffic = log_traffic
         self.fps = fps
+        # Track the active theme name explicitly. Previously we
+        # reverse-guessed by matching DEFAULT_BG to THEMES[name]["bg"],
+        # but amber/dark/green all share (0,0,0) bg so the match was
+        # ambiguous and enter_setup always seeded the Theme field with
+        # "amber" regardless of the actual active theme.
+        self.theme = theme
         self.clients: list[RFBClient] = []
         self._running = False
         # Serializes resizes against the render+send pass in
@@ -318,16 +325,11 @@ class RFBServer:
         except Exception:
             version = "0.1.0"
 
-        # Detect current theme by matching the active bg to the theme
-        # table. Read DEFAULT_BG from the renderer module via attribute
-        # access rather than `from ... import DEFAULT_BG` so we see the
-        # current value (apply_theme reassigns the module attribute).
-        from . import renderer as rmod
-        current_theme = "amber"
-        for name, palette in rmod.THEMES.items():
-            if palette["bg"] == rmod.DEFAULT_BG:
-                current_theme = name
-                break
+        # Use the tracked theme attribute. Don't reverse-guess from
+        # DEFAULT_BG — amber/dark/green all share (0,0,0) bg and the
+        # lookup was ambiguous, always falling back to "amber" first
+        # match in the dict.
+        current_theme = self.theme
 
         async with self._resize_lock:
             self._setup = SetupScreen(
@@ -389,6 +391,7 @@ class RFBServer:
         if isinstance(new_theme, str):
             try:
                 apply_theme(new_theme)
+                self.theme = new_theme
             except ValueError:
                 pass
 
