@@ -64,6 +64,12 @@ _LIGHT_ANSI = {
     "brightwhite":   (60, 60, 60),
 }
 
+# PowerShell classic — Windows PowerShell's default color scheme.
+# bg = #012456 (dark navy), fg = #EEEDF0 (off-white). Same standard
+# xterm ANSI colors as our "dark" theme since PowerShell uses
+# standard Windows console colors.
+_POWERSHELL_ANSI = dict(_STD_ANSI)
+
 # Green phosphor theme — every ANSI color becomes a shade of green.
 _GREEN_ANSI = {
     "black":         (0, 30, 10),
@@ -113,9 +119,9 @@ THEMES: dict[str, dict] = {
     # yellow or mint, which is neither amber nor phosphor green.
     "amber": {
         "bg":     (0, 0, 0),
-        "fg":     (255, 200, 0),   # 13.51:1, keeps amber hue
-        "bold":   (255, 230, 40),  # 15.87:1, brighter amber for bold
-        "cursor": (255, 200, 0),
+        "fg":     (255, 190, 80),  # 12.73:1, warmer/orangy amber
+        "bold":   (255, 220, 120), # ~14.5:1, brighter peach-amber for bold
+        "cursor": (255, 190, 80),
         "ansi":   _AMBER_ANSI,
     },
     "light": {  # black on white — 21.00:1 (WCAG max)
@@ -138,6 +144,13 @@ THEMES: dict[str, dict] = {
         "bold":   (180, 255, 180),
         "cursor": (120, 255, 120),
         "ansi":   _GREEN_ANSI,
+    },
+    "powershell": {  # Windows PowerShell classic — 12.97:1
+        "bg":     (0x01, 0x24, 0x56),  # #012456 dark navy
+        "fg":     (0xEE, 0xED, 0xF0),  # #EEEDF0 off-white
+        "bold":   (0xFF, 0xFF, 0xFF),  # pure white for bold
+        "cursor": (0xEE, 0xED, 0xF0),
+        "ansi":   _POWERSHELL_ANSI,
     },
 }
 

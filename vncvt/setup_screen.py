@@ -105,7 +105,7 @@ class SetupScreen:
             _field("FPS", [15, 30, 60, 90, 120], initial.get("fps", 30)),
             _field(
                 "Theme",
-                ["amber", "dark", "light", "green"],
+                ["amber", "dark", "light", "green", "powershell"],
                 initial.get("theme", "amber"),
             ),
             _field(
