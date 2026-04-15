@@ -209,3 +209,32 @@ VNC client ⇄ RFB (vncvt/server.py)
                  │
                  └── vncvt/cast_replay.py — replay + contrast inspector
 ```
+
+## References
+
+### Motivation
+
+- Joel Buckley, [*"OS X with a VT220, Part 1"*](https://blog.joelbuckley.com.au/2021/07/os-x-vt220-part-1) — connecting a DEC VT220 to a 2017 MacBook Pro via USB-C → RS-232 → null modem, 9600 baud `getty` on macOS. The amber VT220 died from a flyback transformer failure partway through; the write-up ends on a white-phosphor VT510. This is the gap vncvt fills for anyone whose market doesn't carry working amber CRTs.
+- Drew DeVault, [*"Integrating a VT220 into my life"*](https://drewdevault.com/2016/03/22/Integrating-a-VT220-into-my-life.html) — a VT220 wired into a sway compositor as "almost a fourth monitor" via a fake output plus tmux auto-attach, used daily for mutt. The proof that the device earns its desk space when it's a real workflow target, not just a curiosity.
+- Hackaday (2024), [*"A Look at the DEC VT220, a Proper Serial Terminal"*](https://hackaday.com/2024/07/17/a-look-at-the-dec-vt220-a-proper-serial-terminal/) — a 2024 showcase of working VT220 hardware and a reminder that we call our terminals "terminal emulators" for a reason. The comment thread surfaces the amber-screen nostalgia that drove this project.
+- Laughing Squid, [*"How To Connect a Vintage VT220 Terminal to a Mac Pro"*](https://laughingsquid.com/how-to-connect-a-vintage-vt220-terminal-to-a-mac-pro/) — the Justin Oullette photos that made the setup look irresistible in the first place.
+
+### Standards & formats
+
+- [RFB Protocol 3.8](https://datatracker.ietf.org/doc/html/rfc6143) — what vncvt speaks to VNC clients
+- [DEC VT220 Programmer Reference](https://vt100.net/docs/vt220-rm/) (HTML) and [Bitsavers VT220 archive](https://bitsavers.trailing-edge.com/pdf/dec/terminal/vt220/) (original PDFs) — the SET-UP mode field layout and key handling
+- [Asciinema v2 cast format](https://docs.asciinema.org/manual/asciicast/v2/) — `--record` output
+- [WCAG 2.1 contrast ratio](https://www.w3.org/TR/WCAG21/#contrast-minimum) — the floor the cast replay inspector measures against
+
+### Color science
+
+- [OKLab / OKLCH](https://bottosson.github.io/posts/oklab/) by Björn Ottosson — the perceptual color space behind the uniform-lightness ANSI palettes and the fg readability lift
+- [Xterm 256-color palette](https://jonasjacek.github.io/colors/) — the `true-color` mode lookup table
+
+### Libraries
+
+- [pyte](https://github.com/selectel/pyte) — VT100/VT102 screen emulator
+- [skia-python](https://github.com/kyamagu/skia-python) — the Skia binding used for glyph rasterization
+- [asyncvnc](https://github.com/barneygale/asyncvnc) — the test-side RFB client
+- [agg](https://github.com/asciinema/agg) / [svg-term-cli](https://github.com/marionebl/svg-term-cli) — convert recorded `.cast` files to GIF / animated SVG
+
