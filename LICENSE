@@ -24,11 +24,15 @@ SOFTWARE.
 Third-party fonts bundled in vncvt/fonts/ — each governed by its own license:
 
   Terminus TTF (TerminusTTF-*.ttf)
-    Copyright (C) Dimitar Zhekov
+    Copyright (c) 2010 Dimitar Toshkov Zhekov, with Reserved Font Name "Terminus Font"
+    Copyright (c) 2011-2023 Tilman Blumenbach, with Reserved Font Name "Terminus (TTF)"
     SIL Open Font License 1.1 — see vncvt/fonts/COPYING.terminus
 
   Sarasa Mono K (SarasaMonoK-*.ttf)
-    Copyright (c) 2015-2025 Renzhi Li and contributors
+    Copyright (c) 2015-2025 Renzhi Li (aka. Belleve Invis, belleve@typeof.net)
+    Portions Copyright (c) 2016 The Inter Project Authors
+    Portions Copyright (c) 2014-2021 Adobe Systems Incorporated, with Reserved Font Name "Source"
+    Portions Copyright (c) 2012 Google Inc.
     SIL Open Font License 1.1 — see vncvt/fonts/COPYING.sarasa
 
   Noto Color Emoji (NotoColorEmoji.ttf)
