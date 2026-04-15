@@ -328,7 +328,50 @@ class TerminalRenderer:
         )
         self._skia_font = skia.Font(self._skia_typeface, font_size)
         self._skia_font_bold = skia.Font(self._skia_typeface_bold, font_size)
-        for f in (self._skia_font, self._skia_font_bold):
+
+        # Font fallback chain. When a codepoint's glyph is missing from
+        # the primary typeface (Hangul / CJK / emoji), we walk this list
+        # and pick the first entry whose unicharToGlyph returns non-zero.
+        # Order matters: we want SF Mono (or whatever --font was set)
+        # to win for Latin, Sarasa Mono K for CJK, and Apple Color
+        # Emoji for pictographic codepoints.
+        self._skia_fallback_fonts: list[skia.Font] = [self._skia_font]
+        self._skia_fallback_fonts_bold: list[skia.Font] = [self._skia_font_bold]
+        # Per-font "is color bitmap" flag so _draw_glyph can avoid
+        # tinting emoji via Paint.setColor.
+        self._skia_fallback_is_color: list[bool] = [False]
+        self._skia_fallback_is_color_bold: list[bool] = [False]
+
+        sarasa_reg = _VENDORED_FONT_DIR / "SarasaMonoK-Regular.ttf"
+        sarasa_bold = _VENDORED_FONT_DIR / "SarasaMonoK-Bold.ttf"
+        if sarasa_reg.is_file():
+            tf = skia.Typeface.MakeFromFile(str(sarasa_reg))
+            if tf is not None:
+                self._skia_fallback_fonts.append(skia.Font(tf, font_size))
+                self._skia_fallback_is_color.append(False)
+        if sarasa_bold.is_file():
+            tf = skia.Typeface.MakeFromFile(str(sarasa_bold))
+            if tf is not None:
+                self._skia_fallback_fonts_bold.append(skia.Font(tf, font_size))
+                self._skia_fallback_is_color_bold.append(False)
+
+        apple_emoji = Path("/System/Library/Fonts/Apple Color Emoji.ttc")
+        if apple_emoji.is_file():
+            tf = skia.Typeface.MakeFromFile(str(apple_emoji))
+            if tf is not None:
+                emoji_font = skia.Font(tf, font_size)
+                self._skia_fallback_fonts.append(emoji_font)
+                self._skia_fallback_is_color.append(True)
+                # Bold reuses the same emoji font — color emoji has no
+                # weight axis.
+                self._skia_fallback_fonts_bold.append(emoji_font)
+                self._skia_fallback_is_color_bold.append(True)
+
+        # Apply shared rasterization flags to every fallback font.
+        for f in (
+            *self._skia_fallback_fonts,
+            *self._skia_fallback_fonts_bold,
+        ):
             f.setSubpixel(True)
             # Grayscale AA (not LCD subpixel) — amber-on-black has no
             # blue channel transition, so subpixel rendering produces
@@ -382,6 +425,30 @@ class TerminalRenderer:
         self.image = Image.new("RGBX", (self.width, self.height), DEFAULT_BG)
         self._prev_cursor = (-1, -1)
 
+    def _find_font_for_char(
+        self, ch: str, bold: bool,
+    ) -> tuple["skia.Font", bool]:
+        """Pick the first fallback font that has a glyph for ``ch``.
+
+        Returns ``(font, is_color)`` where is_color signals that the
+        font renders via color bitmaps (Apple Color Emoji) and the
+        caller must not apply a Paint color — that would tint the
+        sbix bitmap.
+        """
+        if bold:
+            fonts = self._skia_fallback_fonts_bold
+            color_flags = self._skia_fallback_is_color_bold
+        else:
+            fonts = self._skia_fallback_fonts
+            color_flags = self._skia_fallback_is_color
+        code = ord(ch[0])
+        for font, is_color in zip(fonts, color_flags):
+            if font.unicharToGlyph(code):
+                return font, is_color
+        # Fall back to the primary so the renderer at least draws
+        # .notdef instead of silently skipping.
+        return fonts[0], color_flags[0]
+
     def _draw_glyph(
         self,
         ch: str,
@@ -404,11 +471,13 @@ class TerminalRenderer:
         surface = skia.Surface.MakeRasterN32Premul(w, h)
         canvas = surface.getCanvas()
         canvas.clear(skia.ColorSetRGB(*bg))
-        font = self._skia_font_bold if bold else self._skia_font
-        paint = skia.Paint(
-            Color=skia.ColorSetRGB(*fg),
-            AntiAlias=True,
-        )
+        font, is_color = self._find_font_for_char(ch, bold=bold)
+        paint = skia.Paint(AntiAlias=True)
+        if not is_color:
+            # Color-bitmap fonts (Apple Color Emoji) carry their own
+            # sbix pixels. Applying Paint.setColor would tint the
+            # bitmap to the fg color, destroying the emoji art.
+            paint.setColor(skia.ColorSetRGB(*fg))
         canvas.drawString(ch, 0, self._skia_baseline, font, paint)
         # Snapshot -> RGBA bytes -> paste into self.image.
         # skia N32Premul is BGRA on little-endian Apple silicon; use
