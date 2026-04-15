@@ -1,8 +1,20 @@
 # vncvt
 
-VNC terminal server with VT220 amber aesthetic. Serves an interactive bash session over the VNC (RFB) protocol, rendered with amber-tinted ANSI colors inspired by classic DEC VT220 phosphor displays.
+VNC terminal server with VT220 amber aesthetic. Serves an interactive bash session over the VNC (RFB) protocol, rendered with Skia + LCD-filtered AA on a configurable color palette. Works with any VNC client including macOS Screen Sharing.app.
 
-![vncvt screenshot](screenshot.png)
+## Theme showcase
+
+Five built-in themes. Switch with `--theme NAME` on the CLI or press **F3** inside the VNC session to open SET-UP mode and cycle `Theme` live. Every theme ships a full 16-color ANSI palette, hue-appropriate yellow/green/red, and clears WCAG AAA contrast.
+
+| Theme | Preview | Colors | Contrast |
+|---|---|---|---|
+| `amber` | ![amber](docs/screenshots/claude-code-init-amber.png) | warm orange-amber on black | 12.73:1 |
+| `dark` | ![dark](docs/screenshots/claude-code-init-dark.png) | pure white on black | 21.00:1 |
+| `light` | ![light](docs/screenshots/claude-code-init-light.png) | black on white | 21.00:1 |
+| `green` | ![green](docs/screenshots/claude-code-init-green.png) | phosphor green on black | 16.31:1 |
+| `powershell` | ![powershell](docs/screenshots/claude-code-init-powershell.png) | off-white on navy `#012456` | 12.97:1 |
+
+All screenshots are Claude Code's welcome panel, captured at 80×24 with SF Mono 13pt and `line-height 1.1`.
 
 ## Features
 
@@ -44,8 +56,8 @@ uv run vncvt
 --font PATH         Path to a monospace TTF font (default: SF Mono
                     on macOS, DejaVu Sans Mono on Linux, Terminus
                     TTF as a vendored fallback)
---theme NAME        Color palette: light, dark, amber, green
-                    (default: light)
+--theme NAME        Color palette: light, dark, amber, green,
+                    powershell (default: light)
 --line-height MULT  Line height multiplier, 0.8–2.0 (default: 1.1)
 --config PATH       Path to a TOML config file (default:
                     ~/.config/vncvt/config.toml)
