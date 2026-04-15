@@ -17,6 +17,9 @@ Or live against a running vncvt + Claude Code:
 The --live mode spawns vncvt with claude as the shell, waits for
 the welcome panel, triggers a server dump, and inspects it all in
 one step.
+
+This script is a thin shim around ``vncvt.cast_replay.inspect_pixels``
+so the WCAG math lives in exactly one place.
 """
 
 from __future__ import annotations
@@ -34,33 +37,11 @@ from PIL import Image
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-
-def _srgb_to_linear(c: float) -> float:
-    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+from vncvt.cast_replay import ContrastReport, inspect_pixels  # noqa: E402
 
 
-def _luminance(rgb: tuple[int, int, int]) -> float:
-    return (
-        0.2126 * _srgb_to_linear(rgb[0] / 255.0)
-        + 0.7152 * _srgb_to_linear(rgb[1] / 255.0)
-        + 0.0722 * _srgb_to_linear(rgb[2] / 255.0)
-    )
-
-
-def _wcag(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float:
-    l1, l2 = _luminance(fg), _luminance(bg)
-    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
-
-
-def _inspect_bundle(
-    scene_dir: Path, threshold: float,
-) -> tuple[list[tuple[int, int, str, str, str, float]], dict]:
-    """Return (below_threshold_cells, stats) for a scene bundle.
-
-    Walks every non-space cell, measures the actual rendered contrast
-    between the glyph's peak-delta pixel and the cell corner (bg).
-    Returns cells < ``threshold`` plus min/median/max stats across
-    ALL non-space cells (not just the ones below threshold)."""
+def _inspect_bundle(scene_dir: Path, threshold: float) -> ContrastReport:
+    """Load a scene bundle and run the shared WCAG kernel against it."""
     fb_path = scene_dir / "scene.fb.png"
     term_path = scene_dir / "scene.term.json"
     if not fb_path.is_file() or not term_path.is_file():
@@ -73,81 +54,14 @@ def _inspect_bundle(
     dims = term["dimensions"]
     cols = int(dims["cols"])
     rows = int(dims["rows"])
-    cells = term.get("cells", {})
+    raw_cells = term.get("cells", {})
 
-    padding = 5  # TerminalRenderer.PADDING
-    cell_w = (img.width - 2 * padding) / cols
-    cell_h = (img.height - 2 * padding) / rows
-
-    results: list[tuple[int, int, str, str, str, float]] = []
-    all_ratios: list[float] = []
-    for key, cell in cells.items():
-        ch = cell.get("c", "")
-        if not ch or ch == " ":
-            continue
+    cells: dict[tuple[int, int], str] = {}
+    for key, cell in raw_cells.items():
         col_s, row_s = key.split(",")
-        col, row = int(col_s), int(row_s)
-        x0 = int(round(col * cell_w)) + padding
-        y0 = int(round(row * cell_h)) + padding
-        x1 = int(round((col + 1) * cell_w)) + padding
-        y1 = int(round((row + 1) * cell_h)) + padding
-        crop = img.crop((x0, y0, x1, y1))
-        raw = crop.tobytes()
+        cells[(int(col_s), int(row_s))] = cell.get("c", "")
 
-        # Corner pixels = bg sample (usually empty areas in the cell)
-        bg = (raw[0], raw[1], raw[2])
-        # fg sample = the pixel with the MOST different luminance from bg
-        bg_lum = _luminance(bg)
-        best_px = bg
-        best_delta = 0.0
-        for i in range(0, len(raw), 3):
-            px = (raw[i], raw[i + 1], raw[i + 2])
-            d = abs(_luminance(px) - bg_lum)
-            if d > best_delta:
-                best_delta = d
-                best_px = px
-        ratio = _wcag(best_px, bg)
-        all_ratios.append(ratio)
-        if ratio < threshold:
-            results.append((
-                col, row, ch,
-                "#{:02x}{:02x}{:02x}".format(*best_px),
-                "#{:02x}{:02x}{:02x}".format(*bg),
-                ratio,
-            ))
-    all_ratios.sort()
-    if all_ratios:
-        stats = {
-            "count": len(all_ratios),
-            "min": all_ratios[0],
-            "median": all_ratios[len(all_ratios) // 2],
-            "max": all_ratios[-1],
-            "p10": all_ratios[len(all_ratios) // 10],
-            "p90": all_ratios[len(all_ratios) * 9 // 10],
-        }
-    else:
-        stats = {"count": 0}
-    return results, stats
-
-
-def _report(results: list, stats: dict) -> None:
-    if stats.get("count", 0) == 0:
-        print("No non-space cells in scene.")
-        return
-    print(f"Cell contrast stats ({stats['count']} non-space cells):")
-    print(f"  min    = {stats['min']:6.2f}:1")
-    print(f"  p10    = {stats['p10']:6.2f}:1")
-    print(f"  median = {stats['median']:6.2f}:1")
-    print(f"  p90    = {stats['p90']:6.2f}:1")
-    print(f"  max    = {stats['max']:6.2f}:1")
-    print()
-    if not results:
-        print("All cells clear the contrast threshold.")
-        return
-    print(f"{len(results)} cells below threshold:")
-    print(f"  {'col':>4} {'row':>4}  {'char':6}  {'fg':8}  {'bg':8}  {'ratio':>8}")
-    for col, row, ch, fg, bg, ratio in sorted(results, key=lambda r: r[5]):
-        print(f"  {col:>4} {row:>4}  {repr(ch):6}  {fg}  {bg}  {ratio:>7.2f}:1")
+    return inspect_pixels(img, cells, cols, rows, threshold=threshold)
 
 
 async def _live_capture(threshold: float, theme: str) -> int:
@@ -201,8 +115,8 @@ async def _live_capture(threshold: float, theme: str) -> int:
         finally:
             stop_vncvt(handle)
 
-        results, stats = _inspect_bundle(keep, threshold)
-        _report(results, stats)
+        report = _inspect_bundle(keep, threshold)
+        print(report.format())
     return 0
 
 
@@ -232,8 +146,11 @@ def main() -> int:
 
     if args.scene_dir is None:
         parser.error("give a scene_dir path or use --live")
-    results, stats = _inspect_bundle(args.scene_dir, args.min)
-    _report(results, stats)
+    report = _inspect_bundle(args.scene_dir, args.min)
+    if not report:
+        print("No non-space cells in scene.")
+        return 0
+    print(report.format())
     return 0
 
 

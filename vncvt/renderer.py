@@ -258,6 +258,96 @@ def _build_256_palette() -> list[tuple[int, int, int]]:
 _PALETTE_256 = _build_256_palette()
 
 
+# Standard xterm 256-color palette — NOT theme-tinted. Used by
+# true-color mode so TUIs emitting ANSI indices render in their
+# native xterm colors instead of the theme's OKLCH palette.
+_STANDARD_ANSI_16 = [
+    (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0),
+    (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
+    (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0),
+    (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+]
+
+
+def _build_standard_256() -> list[tuple[int, int, int]]:
+    palette = list(_STANDARD_ANSI_16)
+    levels = [0, 95, 135, 175, 215, 255]
+    for r in levels:
+        for g in levels:
+            for b in levels:
+                palette.append((r, g, b))
+    for i in range(24):
+        v = 8 + i * 10
+        palette.append((v, v, v))
+    return palette
+
+
+_STANDARD_PALETTE_256 = _build_standard_256()
+
+
+def _snap_to_palette(
+    rgb: tuple[int, int, int],
+    palette: list[tuple[int, int, int]] | tuple[tuple[int, int, int], ...],
+) -> tuple[int, int, int]:
+    """Return the palette entry with minimum squared-RGB distance
+    from ``rgb``. Used by 16-color mode to quantize truecolor
+    inputs down to the theme's ANSI 16."""
+    best = palette[0]
+    best_d = float("inf")
+    for entry in palette:
+        d = (
+            (rgb[0] - entry[0]) ** 2
+            + (rgb[1] - entry[1]) ** 2
+            + (rgb[2] - entry[2]) ** 2
+        )
+        if d < best_d:
+            best_d = d
+            best = entry
+    return best
+
+
+def _wcag_contrast(
+    fg: tuple[int, int, int], bg: tuple[int, int, int],
+) -> float:
+    """WCAG 2.1 contrast ratio. Used to keep 16-color fg snaps
+    readable against the cell bg they'll be rendered on."""
+    def srgb_to_linear(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    def luminance(rgb):
+        return (
+            0.2126 * srgb_to_linear(rgb[0] / 255.0)
+            + 0.7152 * srgb_to_linear(rgb[1] / 255.0)
+            + 0.0722 * srgb_to_linear(rgb[2] / 255.0)
+        )
+
+    l1, l2 = luminance(fg), luminance(bg)
+    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+
+
+def _snap_to_palette_readable(
+    rgb: tuple[int, int, int],
+    palette: list[tuple[int, int, int]] | tuple[tuple[int, int, int], ...],
+    cell_bg: tuple[int, int, int] | None,
+    min_ratio: float = 3.0,
+) -> tuple[int, int, int]:
+    """Nearest-RGB snap, but constrained to palette entries that
+    clear ``min_ratio`` WCAG contrast against ``cell_bg``. Falls
+    back to the highest-contrast entry if none qualify — that way
+    the chunky 16-color aesthetic stays readable.
+
+    ``cell_bg`` unknown → falls through to plain ``_snap_to_palette``.
+    """
+    if cell_bg is None:
+        return _snap_to_palette(rgb, palette)
+    readable = [e for e in palette if _wcag_contrast(e, cell_bg) >= min_ratio]
+    if readable:
+        return _snap_to_palette(rgb, readable)
+    # No palette entry is readable on this bg — pick the one with
+    # maximum contrast as a last resort.
+    return max(palette, key=lambda e: _wcag_contrast(e, cell_bg))
+
+
 def _cell_in_selection(
     col: int,
     row: int,
@@ -294,11 +384,13 @@ class TerminalRenderer:
         font_size: int = 16,
         line_height: float = 1.0,
         contrast: str = "normal",
+        color_mode: str = "256-color",
     ):
         self.cols = cols
         self.rows = rows
         self.padding = self.PADDING
         self.contrast = contrast
+        self.color_mode = color_mode
         self.line_height = line_height
 
         # Load fonts
@@ -528,7 +620,11 @@ class TerminalRenderer:
         self._prev_cursor = (-1, -1)
 
     def _resolve_color(
-        self, color: str, bold: bool = False, is_bg: bool = False
+        self,
+        color: str,
+        bold: bool = False,
+        is_bg: bool = False,
+        cell_bg: tuple[int, int, int] | None = None,
     ) -> tuple[int, int, int]:
         """Map a pyte color value to an amber-tinted RGB tuple."""
         if color == "default" or color is None:
@@ -546,9 +642,36 @@ class TerminalRenderer:
             return AMBER_COLORS[color]
 
         # Integer index (256-color)
-        if isinstance(color, int) or (isinstance(color, str) and color.isdigit()):
+        if isinstance(color, int) or (
+            isinstance(color, str) and len(color) <= 3 and color.isdigit()
+        ):
             idx = int(color)
             if 0 <= idx < 256:
+                if self.color_mode == "monochrome":
+                    r, g, b = _STANDARD_PALETTE_256[idx]
+                    return self._apply_oklab_ramp(
+                        r, g, b, is_bg=is_bg, cell_bg=cell_bg,
+                    )
+                if self.color_mode == "16-color":
+                    wrapped = _PALETTE_256[idx % 16]
+                    if is_bg or cell_bg is None:
+                        return wrapped
+                    if _wcag_contrast(wrapped, cell_bg) >= 3.0:
+                        return wrapped
+                    # fg: fall back to the 16-color palette extended
+                    # with the theme fg/bg poles so a readable option
+                    # always exists. Needed for non-default cell bgs
+                    # like Claude Code's #eeeeee status bar on light
+                    # theme, where none of the 16 tinted entries are
+                    # far enough from the bg.
+                    return _snap_to_palette_readable(
+                        wrapped,
+                        list(_PALETTE_256[:16]) + [DEFAULT_FG, DEFAULT_BG],
+                        cell_bg,
+                    )
+                if self.color_mode == "true-color":
+                    return _STANDARD_PALETTE_256[idx]
+                # default "256-color": theme's OKLCH palette
                 return _PALETTE_256[idx]
 
         # 6-char hex string (truecolor). We route it through the
@@ -565,24 +688,96 @@ class TerminalRenderer:
                 r = int(color[0:2], 16)
                 g = int(color[2:4], 16)
                 b = int(color[4:6], 16)
-                from .oklch import srgb_to_oklab
-                L, _, _ = srgb_to_oklab(r, g, b)
-                # Clamp L into [0, 1] then apply gamma lift. The 0.4
-                # exponent was tuned against Claude Code's actual grey
-                # inputs (#808080, #949494, #d78787) to clear 4.5:1 on
-                # every built-in theme's bg.
-                t = max(0.0, min(1.0, L)) ** 0.4
-                bg_r, bg_g, bg_b = DEFAULT_BG
-                fg_r, fg_g, fg_b = DEFAULT_FG
-                return (
-                    int(bg_r + (fg_r - bg_r) * t),
-                    int(bg_g + (fg_g - bg_g) * t),
-                    int(bg_b + (fg_b - bg_b) * t),
+                raw_rgb = (r, g, b)
+                ramp_rgb = self._apply_oklab_ramp(
+                    r, g, b, is_bg=is_bg, cell_bg=cell_bg,
                 )
+                if self.color_mode == "monochrome":
+                    return ramp_rgb
+                if self.color_mode == "16-color":
+                    if is_bg:
+                        return _snap_to_palette(raw_rgb, _PALETTE_256[:16])
+                    return _snap_to_palette_readable(
+                        raw_rgb,
+                        list(_PALETTE_256[:16]) + [DEFAULT_FG, DEFAULT_BG],
+                        cell_bg,
+                    )
+                if self.color_mode == "true-color":
+                    # fg keeps lift (else Claude dim-grey fg becomes
+                    # invisible); bg passes through raw.
+                    return raw_rgb if is_bg else ramp_rgb
+                # default "256-color": bg → theme ramp; fg → theme ramp.
+                return ramp_rgb
             except ValueError:
                 pass
 
         return DEFAULT_FG
+
+    def _apply_oklab_ramp(
+        self,
+        r: int,
+        g: int,
+        b: int,
+        is_bg: bool,
+        cell_bg: tuple[int, int, int] | None,
+    ) -> tuple[int, int, int]:
+        """Map a raw truecolor input onto the theme's bg→fg OKLab ramp.
+
+        Returns the ramp-mapped RGB regardless of mode; callers decide
+        whether to use it raw, blended, or as a full replacement.
+
+        Preserves the orientation flip, cell_bg-aware reference frame,
+        L_eff floor, and gamma 0.4 lift introduced earlier so Claude
+        Code's mid-grey hint colors clear WCAG AA on every theme.
+        """
+        from .oklch import srgb_to_oklab
+        L, _, _ = srgb_to_oklab(r, g, b)
+        # Choose the lift's reference frame. If the caller told us the
+        # cell's actual bg (via cell_bg), use that — fg should always be
+        # pushed *away* from the bg it will be painted against,
+        # regardless of theme defaults. Falling back to DEFAULT_BG /
+        # DEFAULT_FG when cell_bg is unknown preserves legacy behavior.
+        if cell_bg is not None:
+            bg_L, _, _ = srgb_to_oklab(*cell_bg)
+            if bg_L >= 0.5:
+                # Light cell bg: push fg toward black so the darkest
+                # input intent (L=0) lands on black.
+                ref_bg = (255, 255, 255)
+                ref_fg = (0, 0, 0)
+            else:
+                ref_bg = (0, 0, 0)
+                ref_fg = (255, 255, 255)
+            ref_bg_L = 1.0 if bg_L >= 0.5 else 0.0
+            ref_fg_L = 0.0 if bg_L >= 0.5 else 1.0
+        else:
+            ref_bg = DEFAULT_BG
+            ref_fg = DEFAULT_FG
+            ref_bg_L, _, _ = srgb_to_oklab(*DEFAULT_BG)
+            ref_fg_L, _, _ = srgb_to_oklab(*DEFAULT_FG)
+        # The lift parameterizes the input on a bg→fg perceptual ramp.
+        # On dark-on-light orientations (ref_bg brighter than ref_fg),
+        # L=0 is the user's darkest intent and should map to ref_fg
+        # (black), not ref_bg (white). Flip the parameter so the ramp
+        # always goes "user intent low → bg, user intent high → fg"
+        # relative to the chosen orientation.
+        L_eff = L if ref_fg_L >= ref_bg_L else (1.0 - L)
+        # Floor L_eff so an input that lands on (or very near) the bg
+        # pole still gets enough lift to escape it. Rescues the
+        # "fg=#000000 on a dark cell bg" case where the user's literal
+        # intent is invisible — we honor the neutrality (still grey)
+        # but force enough delta from the bg to clear ~9:1.
+        L_eff = max(L_eff, 0.5)
+        # Clamp L into [0, 1] then apply gamma lift. The 0.4 exponent
+        # was tuned against Claude Code's actual grey inputs (#808080,
+        # #949494, #d78787) to clear 4.5:1 on every built-in theme bg.
+        t = max(0.0, min(1.0, L_eff)) ** 0.4
+        bg_r, bg_g, bg_b = ref_bg
+        fg_r, fg_g, fg_b = ref_fg
+        return (
+            int(bg_r + (fg_r - bg_r) * t),
+            int(bg_g + (fg_g - bg_g) * t),
+            int(bg_b + (fg_b - bg_b) * t),
+        )
 
     def render_dirty(
         self,
@@ -627,8 +822,10 @@ class TerminalRenderer:
                 x = col * self.cell_width + pad
                 ch = char.data
 
-                fg = self._resolve_color(char.fg, char.bold, is_bg=False)
                 bg = self._resolve_color(char.bg, False, is_bg=True)
+                fg = self._resolve_color(
+                    char.fg, char.bold, is_bg=False, cell_bg=bg,
+                )
 
                 if char.reverse:
                     fg, bg = bg, fg

@@ -23,6 +23,9 @@ class Terminal:
         self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.Stream(self.screen)
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        # Optional asciinema .cast recorder, set by the caller after
+        # construction. None = no recording.
+        self.recorder = None
 
         # Text selection state (in cell coordinates).
         self.selection_anchor: tuple[int, int] | None = None  # (col, row)
@@ -120,6 +123,8 @@ class Terminal:
 
     def feed(self, data: bytes) -> None:
         """Decode bytes and feed to pyte stream."""
+        if self.recorder is not None:
+            self.recorder.record_output(data)
         text = self._decoder.decode(data)
         if text:
             # Any new PTY output cancels an in-progress selection.
@@ -130,6 +135,8 @@ class Terminal:
 
     def write(self, data: bytes) -> None:
         """Write data to PTY master (keyboard input to bash)."""
+        if self.recorder is not None:
+            self.recorder.record_input(data)
         try:
             os.write(self.master_fd, data)
         except OSError:
@@ -143,6 +150,8 @@ class Terminal:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
         os.kill(self.pid, signal.SIGWINCH)
+        if self.recorder is not None:
+            self.recorder.resize(cols, rows)
 
     def get_dirty_rows(self) -> set[int]:
         """Return set of dirty row indices and clear the dirty set.

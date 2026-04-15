@@ -361,6 +361,7 @@ class RFBServer:
                     "theme": current_theme,
                     "line_height": self.renderer.line_height,
                     "contrast": self.renderer.contrast,
+                    "color_mode": self.renderer.color_mode,
                 },
                 server_info={
                     "version": f"vncvt {version}",
@@ -418,6 +419,7 @@ class RFBServer:
         new_font = snap.get("Font size")
         new_lh = snap.get("Line height")
         new_contrast = snap.get("Contrast")
+        new_color_mode = snap.get("Color mode")
         font_changed = (
             isinstance(new_font, int) and new_font != self.renderer.font_size
         )
@@ -429,8 +431,12 @@ class RFBServer:
             isinstance(new_contrast, str)
             and new_contrast != self.renderer.contrast
         )
+        color_mode_changed = (
+            isinstance(new_color_mode, str)
+            and new_color_mode != self.renderer.color_mode
+        )
         theme_changed = isinstance(new_theme, str)
-        if font_changed or lh_changed or theme_changed or contrast_changed:
+        if font_changed or lh_changed or theme_changed or contrast_changed or color_mode_changed:
             async with self._resize_lock:
                 old_renderer = self.renderer
                 self.renderer = TerminalRenderer(
@@ -440,6 +446,7 @@ class RFBServer:
                     font_size=new_font if font_changed else old_renderer.font_size,
                     line_height=new_lh if lh_changed else old_renderer.line_height,
                     contrast=new_contrast if contrast_changed else old_renderer.contrast,
+                    color_mode=new_color_mode if color_mode_changed else old_renderer.color_mode,
                 )
                 all_rows = set(range(self.terminal.rows))
                 self.renderer.render_dirty(self._active_screen, all_rows)

@@ -112,7 +112,7 @@ def test_snapshot_returns_editable_only():
     snap = s.snapshot()
     assert set(snap.keys()) == {
         "Columns", "Rows", "Font size", "FPS", "Theme", "Line height",
-        "Contrast",
+        "Contrast", "Color mode",
     }
     assert "Server" not in snap
     assert "Clients" not in snap

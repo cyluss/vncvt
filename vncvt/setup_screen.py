@@ -118,6 +118,11 @@ class SetupScreen:
                 ["normal", "high", "max"],
                 initial.get("contrast", "normal"),
             ),
+            _field(
+                "Color mode",
+                ["monochrome", "16-color", "256-color", "true-color"],
+                initial.get("color_mode", "256-color"),
+            ),
         ]
         # Readonly info fields
         self.fields.append(
@@ -136,7 +141,7 @@ class SetupScreen:
         )
 
         self.selected = 0  # index into self.fields (editable only)
-        self._editable_count = 7  # first N fields are editable
+        self._editable_count = 8  # first N fields are editable
         self.redraw()
 
     # -------- key handling --------

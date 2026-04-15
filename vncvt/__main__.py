@@ -11,6 +11,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from .cast_recorder import CastRecorder
 from .terminal import Terminal
 from .renderer import (
     TerminalRenderer, FONT_SEARCH_PATHS, _find_font, THEMES, apply_theme,
@@ -24,7 +25,8 @@ from .scene_dump import SceneDumper, serve_control_socket
 # unknown key in the config file fails loud.
 _CONFIG_KEYS = {
     "host", "port", "cols", "rows", "mode", "font_size", "font",
-    "fps", "theme", "line_height", "contrast", "shell", "password",
+    "fps", "theme", "line_height", "contrast", "color_mode",
+    "shell", "password",
 }
 
 
@@ -116,10 +118,11 @@ def main() -> None:
              "matches macOS Terminal.app's appearance.",
     )
     parser.add_argument(
-        "--theme", default=cfg("theme", "light"), choices=sorted(THEMES),
-        help="Color palette (default: light). light = black on white; "
-             "dark = white on black; amber = amber phosphor on black; "
-             "green = classic phosphor green.",
+        "--theme", default=cfg("theme", "amber"), choices=sorted(THEMES),
+        help="Color palette (default: amber). amber = amber phosphor "
+             "on black; dark = white on black; light = black on white; "
+             "green = classic phosphor green; powershell = off-white "
+             "on navy.",
     )
     parser.add_argument(
         "--line-height", type=float, default=cfg("line_height", 1.1),
@@ -127,13 +130,26 @@ def main() -> None:
              "vertical space between rows; range 0.8-2.0.",
     )
     parser.add_argument(
-        "--contrast", default=cfg("contrast", "high"),
+        "--contrast", default=cfg("contrast", "max"),
         choices=("normal", "high", "max"),
         help="Glyph stroke boldness: normal (kFull hinting, single "
              "draw), high (kNone hinting + 1px horizontal embolden, "
-             "~2x ink coverage, DEFAULT), max (kNone + 4-corner "
-             "embolden, ~4x ink). Drop to normal if text looks too "
+             "~2x ink coverage), max (kNone + 4-corner embolden, "
+             "~4x ink, DEFAULT). Drop to normal if text looks too "
              "heavy.",
+    )
+    parser.add_argument(
+        "--color-mode", dest="color_mode",
+        default=cfg("color_mode", "16-color"),
+        choices=("monochrome", "16-color", "256-color", "true-color"),
+        help="Display color depth, Win95-style. monochrome: single "
+             "theme hue along a luminance ramp (VT220 phosphor). "
+             "16-color: theme's ANSI 0-15 only, truecolor inputs snap "
+             "to nearest (EGA/CGA). 256-color (default): theme's "
+             "OKLCH 256 palette, truecolor inputs go through the "
+             "theme ramp (VGA, theme-tinted). true-color: standard "
+             "xterm 256 palette + raw RGB passthrough — only mode "
+             "that shows Claude Code's native colors.",
     )
     parser.add_argument(
         "--fps", type=int, default=cfg("fps", 15),
@@ -170,6 +186,18 @@ def main() -> None:
              "Clients send one JSON document per line: "
              "{\"version\":1,\"op\":\"dump\",\"name\":\"<name>\"} to "
              "trigger a scene dump. Requires --scene-dump-dir.",
+    )
+    parser.add_argument(
+        "--record", default=None,
+        help="Record the PTY output stream to an asciinema v2 .cast "
+             "file at this path. Replay with `asciinema play`, convert "
+             "to GIF with `agg`, or to animated SVG with `svg-term`.",
+    )
+    parser.add_argument(
+        "--record-input", action="store_true",
+        help="Also record keystrokes into the .cast file. Off by default "
+             "because downstream renderers ignore `i` events and it "
+             "roughly doubles file size.",
     )
     parser.add_argument(
         "--info", action="store_true",
@@ -219,6 +247,7 @@ def main() -> None:
                 "shell": args.shell,
                 "theme": args.theme,
                 "line_height": args.line_height,
+                "color_mode": args.color_mode,
             },
             "font_search_path": list(FONT_SEARCH_PATHS),
             "font_found": args.font or _find_font(FONT_SEARCH_PATHS),
@@ -235,6 +264,15 @@ def main() -> None:
     )
 
     terminal = Terminal(cols=args.cols, rows=args.rows, shell=args.shell)
+    if args.record:
+        terminal.recorder = CastRecorder(
+            path=Path(args.record),
+            cols=args.cols,
+            rows=args.rows,
+            shell=args.shell,
+            record_input=args.record_input,
+        )
+        logging.info("recording PTY to %s", args.record)
     renderer = TerminalRenderer(
         cols=args.cols,
         rows=args.rows,
@@ -242,6 +280,7 @@ def main() -> None:
         font_size=args.font_size,
         line_height=args.line_height,
         contrast=args.contrast,
+        color_mode=args.color_mode,
     )
     server = RFBServer(
         host=args.host,
@@ -306,6 +345,8 @@ def main() -> None:
                 Path(args.scene_control_socket).unlink(missing_ok=True)
             except Exception:
                 pass
+        if terminal.recorder is not None:
+            terminal.recorder.close()
         terminal.close()
         loop.close()
 
