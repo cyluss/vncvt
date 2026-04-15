@@ -1,6 +1,10 @@
 # vncvt
 
-VNC terminal server with a VT220 amber aesthetic. Serves an interactive shell over the RFB protocol, rendered with Skia + LCD AA on a configurable OKLCH color palette. Compatible with any VNC client including macOS Screen Sharing.app.
+VNC terminal server with a **warm amber VT220 aesthetic** by default. Serves an interactive shell over the RFB protocol, rendered with Skia + LCD AA on a configurable OKLCH color palette. Compatible with any VNC client including macOS Screen Sharing.app.
+
+![amber](docs/screenshots/claude-code-amber.png)
+
+*Default theme: `amber` — warm amber phosphor on black. Four more themes (`green`, `light`, `dark`, `powershell`) in [docs/SHOWCASE.md](docs/SHOWCASE.md).*
 
 - **Protocol**: RFB 3.3 / 3.7 / 3.8, VNC Authentication, raw + zlib encodings
 - **Terminal**: pyte VT100/VT102 emulator in a real PTY
@@ -24,47 +28,15 @@ uv run vncvt                      # listen on 127.0.0.1:5900, amber theme
 open "vnc://:PASSWORD@127.0.0.1"  # macOS Screen Sharing.app
 ```
 
-## Theme showcase
+## Themes
 
-Five built-in themes. OKLCH-generated 16-color ANSI palettes at uniform perceived lightness. All themes clear WCAG AAA on peak contrast.
-
-Switch themes three ways:
+Five built-in themes. Switch any of three ways:
 
 1. `--theme NAME` at launch
 2. `theme = "…"` in the config file
 3. **F3** → arrow to `Theme` → Return → Escape
 
-### `amber` — warm amber on black *(default)*
-
-![amber](docs/screenshots/claude-code-amber.png)
-
-Measured: modal **9.91:1** / peak 12.73:1.
-
-### `green` — phosphor green on black
-
-![green](docs/screenshots/claude-code-green.png)
-
-Measured: modal **12.10:1** / peak 16.37:1.
-
-### `light` — black on white
-
-![light](docs/screenshots/claude-code-light.png)
-
-Measured: modal **15.91:1** / peak 21.00:1.
-
-### `dark` — white on black
-
-![dark](docs/screenshots/claude-code-dark.png)
-
-Measured: modal **15.46:1** / peak 20.12:1.
-
-### `powershell` — off-white on navy `#012456`
-
-![powershell](docs/screenshots/claude-code-powershell.png)
-
-Measured: modal **11.00:1** / peak 12.97:1.
-
-*Modal* = WCAG ratio between the two most common colors in the rendered screenshot. *Peak* = max fg/bg contrast achievable by the palette. Captured at 80×24, SF Mono 13pt, `line-height 1.1`, `contrast max`.
+See [**docs/SHOWCASE.md**](docs/SHOWCASE.md) for per-theme screenshots, measured contrast ratios, and palette-generation notes.
 
 ## Color modes
 
