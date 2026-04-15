@@ -4,20 +4,39 @@ VNC terminal server with VT220 amber aesthetic. Serves an interactive bash sessi
 
 ## Theme showcase
 
-Five built-in themes. Switch with `--theme NAME` on the CLI or press **F3** inside the VNC session to open SET-UP mode and cycle `Theme` live. Every theme ships an OKLCH-generated 16-color ANSI palette at uniform perceived lightness. All themes clear WCAG AAA on peak contrast; the secondary / hint-text modal pass WCAG AA at minimum.
+Five built-in themes. Switch with `--theme NAME` on the CLI or press **F3** inside the VNC session to open SET-UP mode and cycle `Theme` live. Every theme ships an OKLCH-generated 16-color ANSI palette at uniform perceived lightness. All themes clear WCAG AAA on peak contrast; the hint-text modal pass WCAG AA at minimum. Screenshots are cropped to the top 10 rows of Claude Code's welcome panel for readability.
 
-| Theme | Preview | Colors | Modal† | Peak‡ |
-|---|---|---|---|---|
-| `amber` | ![amber](docs/screenshots/claude-code-init-amber.png) | warm amber on black | 9.91:1 | 12.73:1 |
-| `dark` | ![dark](docs/screenshots/claude-code-init-dark.png) | white on black | 15.46:1 | 20.12:1 |
-| `light` | ![light](docs/screenshots/claude-code-init-light.png) | black on white | 15.91:1 | 21.00:1 |
-| `green` | ![green](docs/screenshots/claude-code-init-green.png) | phosphor green on black | 12.10:1 | 16.37:1 |
-| `powershell` | ![powershell](docs/screenshots/claude-code-init-powershell.png) | off-white on navy `#012456` | 11.00:1 | 12.97:1 |
+### `light` — black on white
 
-† **Modal** = WCAG ratio between the two most common colors in the actual rendered screenshot (i.e. bg vs the body text Claude Code paints).
-‡ **Peak** = the theoretical max fg/bg contrast if every pixel were rendered at full palette extremes.
+![light](docs/screenshots/claude-code-light.png)
 
-All screenshots captured at 80×24, SF Mono 13pt, `line-height 1.1`, `contrast high` (the default — thicker strokes compensate for anti-aliasing dimming on non-retina displays).
+Measured: modal **15.91:1** / peak 21.00:1.
+
+### `dark` — white on black
+
+![dark](docs/screenshots/claude-code-dark.png)
+
+Measured: modal **15.46:1** / peak 20.12:1.
+
+### `amber` — warm amber on black
+
+![amber](docs/screenshots/claude-code-amber.png)
+
+Measured: modal **9.91:1** / peak 12.73:1.
+
+### `green` — phosphor green on black
+
+![green](docs/screenshots/claude-code-green.png)
+
+Measured: modal **12.10:1** / peak 16.37:1.
+
+### `powershell` — off-white on navy `#012456`
+
+![powershell](docs/screenshots/claude-code-powershell.png)
+
+Measured: modal **11.00:1** / peak 12.97:1.
+
+**Modal** = WCAG ratio between the two most common colors in the rendered screenshot (bg vs body text). **Peak** = max fg/bg contrast achievable by the palette. All screenshots captured at 80×24, SF Mono 13pt, `line-height 1.1`, `contrast high` (default — thicker strokes compensate for anti-aliasing dimming on non-retina displays).
 
 ## Features
 

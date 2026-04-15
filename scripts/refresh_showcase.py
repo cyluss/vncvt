@@ -28,6 +28,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import asyncvnc
+from PIL import Image
 
 # Make sure we can import from the repo root when run as a script.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +36,12 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from tests.scenes import trigger_server_dump  # noqa: E402
 from vncvt.supervisor import start_vncvt, stop_vncvt  # noqa: E402
+
+
+# Top content-area height in pixels. Claude Code's welcome panel
+# fits in the first 7-8 rows; 180 px covers all of it at 13pt + 1.1
+# line height and crops out the empty bottom 2/3 of the framebuffer.
+_CROP_HEIGHT = 180
 
 
 CLAUDE_BIN = Path.home() / ".local" / "bin" / "claude"
@@ -96,10 +103,21 @@ async def capture_theme(vncvt_theme: str) -> Path:
                 scene_dir = await trigger_server_dump(
                     handle.control_socket, f"showcase-{vncvt_theme}",
                 )
-                out_path = OUTPUT_DIR / f"claude-code-init-{vncvt_theme}.png"
-                shutil.copy(scene_dir / "scene.fb.png", out_path)
-                print(f"  {vncvt_theme:11} -> {out_path.relative_to(_REPO_ROOT)}")
-                return out_path
+                # Keep the full-height screenshot for archival / debug.
+                full_path = OUTPUT_DIR / f"claude-code-init-{vncvt_theme}.png"
+                shutil.copy(scene_dir / "scene.fb.png", full_path)
+                # Crop to the content area and write claude-code-<theme>.png
+                # — this is what the README references so block <img> tags
+                # render at native size without wasted whitespace.
+                cropped_path = OUTPUT_DIR / f"claude-code-{vncvt_theme}.png"
+                img = Image.open(full_path).convert("RGB")
+                cropped = img.crop((0, 0, img.width, _CROP_HEIGHT))
+                cropped.save(cropped_path)
+                print(
+                    f"  {vncvt_theme:11} -> "
+                    f"{cropped_path.relative_to(_REPO_ROOT)}"
+                )
+                return cropped_path
         finally:
             stop_vncvt(handle)
 
