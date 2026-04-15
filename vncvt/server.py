@@ -140,7 +140,9 @@ class _LoggingWriter:
         return self._writer.get_extra_info(*args, **kwargs)
 
 
-def keysym_to_bytes(keysym: int, ctrl_pressed: bool) -> bytes | None:
+def keysym_to_bytes(
+    keysym: int, ctrl_pressed: bool, alt_pressed: bool = False,
+) -> bytes | None:
     """Convert an X11 keysym to the byte sequence to write to a terminal PTY."""
     # Modifier keys produce no output
     if 0xFFE1 <= keysym <= 0xFFEE:
@@ -156,9 +158,10 @@ def keysym_to_bytes(keysym: int, ctrl_pressed: bool) -> bytes | None:
         if keysym in (0x5B, 0x5C, 0x5D, 0x5E, 0x5F):
             return bytes([keysym - 0x40])
 
-    # ASCII printable
-    if 0x20 <= keysym <= 0x7E:
-        return bytes([keysym])
+    # Shift+Tab → ISO_Left_Tab (keysym 0xFE20 sent by most VNC clients
+    # including macOS Screen Sharing) → CSI Z escape, per xterm.
+    if keysym == 0xFE20:
+        return b"\x1b[Z"
 
     # Special keys
     _SPECIAL: dict[int, bytes] = {
@@ -185,18 +188,25 @@ def keysym_to_bytes(keysym: int, ctrl_pressed: bool) -> bytes | None:
         0xFFC6: b"\x1b[20~",   0xFFC7: b"\x1b[21~",
         0xFFC8: b"\x1b[23~",   0xFFC9: b"\x1b[24~",
     }
-    if keysym in _SPECIAL:
-        return _SPECIAL[keysym]
+    base: bytes | None = None
+    if 0x20 <= keysym <= 0x7E:
+        base = bytes([keysym])
+    elif keysym in _SPECIAL:
+        base = _SPECIAL[keysym]
+    elif keysym >= 0x01000000:  # Unicode keysym
+        base = chr(keysym - 0x01000000).encode("utf-8")
+    elif 0x00A0 <= keysym <= 0x00FF:  # Latin-1
+        base = chr(keysym).encode("utf-8")
 
-    # Unicode keysym (RFB 3.8 extension)
-    if keysym >= 0x01000000:
-        return chr(keysym - 0x01000000).encode("utf-8")
+    if base is None:
+        return None
 
-    # Latin-1 supplement
-    if 0x00A0 <= keysym <= 0x00FF:
-        return chr(keysym).encode("utf-8")
+    # Meta/Alt prefix: standard xterm encoding is ESC + <key>.
+    # Readline, bash, zsh, and Claude Code all parse this form.
+    if alt_pressed:
+        return b"\x1b" + base
 
-    return None
+    return base
 
 
 class RFBServer:
@@ -556,6 +566,7 @@ class RFBClient:
         self.update_requested = False
         self.encodings: list[int] = [0]  # Raw by default
         self._ctrl_pressed = False
+        self._alt_pressed = False
         self._zlib_compressor: zlib.compressobj | None = None
 
         # Default pixel format matches our ServerInit advertisement (RGBX).
@@ -770,6 +781,12 @@ class RFBClient:
                 # Track Ctrl state
                 if keysym in (0xFFE3, 0xFFE4):  # Control_L, Control_R
                     self._ctrl_pressed = bool(down_flag)
+                # Track Alt/Meta state. X11 has separate keysyms for
+                # Alt_L/R (0xFFE9/0xFFEA) and Meta_L/R (0xFFE7/0xFFE8);
+                # we treat both as "ESC-prefix next char", matching
+                # xterm's `metaSendsEscape=true` default.
+                if keysym in (0xFFE7, 0xFFE8, 0xFFE9, 0xFFEA):
+                    self._alt_pressed = bool(down_flag)
 
                 # F3 = SET-UP mode toggle. Captured on key-down;
                 # the shell never sees \x1bOR for F3 anymore.
@@ -790,7 +807,11 @@ class RFBClient:
                     continue
 
                 if down_flag:
-                    byte_seq = keysym_to_bytes(keysym, self._ctrl_pressed)
+                    byte_seq = keysym_to_bytes(
+                        keysym,
+                        self._ctrl_pressed,
+                        alt_pressed=self._alt_pressed,
+                    )
                     if byte_seq:
                         self.server.terminal.write(byte_seq)
 
