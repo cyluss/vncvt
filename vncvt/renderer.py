@@ -261,7 +261,7 @@ def apply_theme(name: str) -> None:
     DEFAULT_FG = palette["fg"]
     BOLD_FG = palette["bold"]
     CURSOR_COLOR = palette["cursor"]
-    _PALETTE_PHOSPHOR = _build_256_from_ansi16(palette["ansi_phosphor"])
+    _PALETTE_PHOSPHOR = _build_256_phosphor(palette["ansi_phosphor"])
     _PALETTE_CGA = _build_256_from_ansi16(palette["ansi_cga"])
     _PALETTE_256_DIMINISHED = _build_256_diminished(
         palette["ansi_cga"], palette["bg"], palette["fg"],
@@ -349,6 +349,9 @@ def _build_256_from_ansi16(
     xterm 6x6x6 cube blended 60/40 toward the dict's white entry so
     it stays on-theme; slots 232-255 are a grey ramp interpolated
     between the dict's black and white slots.
+
+    Used for CGA-style palettes where hue identity is preserved.
+    For phosphor (single-hue) palettes use ``_build_256_phosphor``.
     """
     palette: list[tuple[int, int, int]] = []
     for name in _PYTE_COLOR_NAMES:
@@ -373,6 +376,61 @@ def _build_256_from_ansi16(
                 ))
     black = ansi16["black"]
     white = ansi16["brightwhite"]
+    for i in range(24):
+        t = i / 23.0
+        palette.append((
+            int(black[0] + (white[0] - black[0]) * t),
+            int(black[1] + (white[1] - black[1]) * t),
+            int(black[2] + (white[2] - black[2]) * t),
+        ))
+    return palette
+
+
+def _build_256_phosphor(
+    ansi16: dict[str, tuple[int, int, int]],
+) -> list[tuple[int, int, int]]:
+    """Build a phosphor-mode 256-slot palette.
+
+    Slots 0-15: verbatim phosphor entries (already single-hue).
+    Slots 16-231: xterm 6x6x6 cube collapsed onto the single-hue
+      brightness ramp by mapping each entry's perceived luminance to
+      the palette's black→brightwhite axis. RGB blending (as used by
+      ``_build_256_from_ansi16``) can't be used here because high-B
+      xterm cube entries would keep enough blue to be blue-dominant
+      after the blend, violating the single-hue invariant.
+    Slots 232-255: linear interpolation on the black→brightwhite ramp
+      (same as ``_build_256_from_ansi16``).
+    """
+    palette: list[tuple[int, int, int]] = []
+    for name in _PYTE_COLOR_NAMES:
+        palette.append(ansi16[name])
+    for name in _PYTE_COLOR_NAMES:
+        palette.append(ansi16[_BRIGHT_MAP[name]])
+
+    black = ansi16["black"]
+    white = ansi16["brightwhite"]
+
+    def _lum_to_ramp(r: int, g: int, b: int) -> tuple[int, int, int]:
+        """Map sRGB luminance of (r,g,b) onto the black→white ramp."""
+        lin = lambda v: (v / 255.0 / 12.92 if v / 255.0 <= 0.04045
+                         else ((v / 255.0 + 0.055) / 1.055) ** 2.4)
+        lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        # Gamma lift (matches _apply_oklab_ramp's 0.4 exponent) so
+        # mid-luminance inputs land in the readable midrange rather
+        # than clustering near black.
+        t = min(1.0, max(0.0, lum)) ** 0.4
+        return (
+            int(black[0] + (white[0] - black[0]) * t),
+            int(black[1] + (white[1] - black[1]) * t),
+            int(black[2] + (white[2] - black[2]) * t),
+        )
+
+    levels = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
+    for r in levels:
+        for g in levels:
+            for b in levels:
+                palette.append(_lum_to_ramp(r, g, b))
+
     for i in range(24):
         t = i / 23.0
         palette.append((
@@ -435,7 +493,7 @@ def _build_256_diminished(
 
 # Module-level palette tables. apply_theme() rebuilds these whenever
 # the theme changes.
-_PALETTE_PHOSPHOR = _build_256_from_ansi16(_AMBER_PHOSPHOR)
+_PALETTE_PHOSPHOR = _build_256_phosphor(_AMBER_PHOSPHOR)
 _PALETTE_CGA = _build_256_from_ansi16(_AMBER_CGA)
 _PALETTE_256_DIMINISHED = _build_256_diminished(
     _AMBER_CGA, (0, 0, 0), (255, 190, 80),
@@ -768,10 +826,13 @@ class TerminalRenderer:
         canvas.clear(skia.ColorSetRGB(*bg))
         font, is_color = self._find_font_for_char(ch, bold=bold)
         paint = skia.Paint(AntiAlias=True)
-        if not is_color:
-            # Color-bitmap fonts (Apple Color Emoji) carry their own
-            # sbix pixels. Applying Paint.setColor would tint the
-            # bitmap to the fg color, destroying the emoji art.
+        if not is_color or self.color_mode == "phosphor":
+            # Color-bitmap fonts (Apple Color Emoji / Noto Color Emoji)
+            # carry their own sbix/CBDT pixels; applying Paint.setColor
+            # tints the bitmap to the fg color, destroying the art. The
+            # exception is phosphor mode, which collapses every hue to the
+            # theme's single-hue ramp — emoji must be tinted amber too so
+            # no blue-dominant pixels leak through from the color bitmaps.
             paint.setColor(skia.ColorSetRGB(*fg))
         canvas.drawString(ch, 0, self._skia_baseline, font, paint)
         if not is_color:
@@ -791,14 +852,17 @@ class TerminalRenderer:
                     ch, 0.5, self._skia_baseline + 0.5, font, paint,
                 )
         # Snapshot -> RGBA bytes -> paste into self.image.
-        # skia N32Premul is BGRA on little-endian Apple silicon; use
-        # encodeToData(PNG) if byte-order matters, but for speed we
-        # use peekPixels and swizzle.
-        img_info = skia.ImageInfo.MakeN32Premul(w, h)
+        # Skia's native N32 colour type is BGRA on Linux (little-endian
+        # x86) and RGBA on macOS arm64. To get a consistent channel order
+        # we request kRGBA_8888_SkColorType explicitly; Skia performs the
+        # BGRA→RGBA swizzle during readPixels if needed.
+        img_info = skia.ImageInfo.Make(
+            w, h,
+            skia.kRGBA_8888_ColorType,
+            skia.kPremul_AlphaType,
+        )
         buf = bytearray(w * h * 4)
         surface.readPixels(img_info, buf, w * 4, 0, 0)
-        # Skia's N32 is RGBA_8888 on macOS arm64 (and RGBA by default
-        # on most modern builds), so no byte swizzle needed.
         tile = Image.frombytes("RGBA", (w, h), bytes(buf))
         self.image.paste(tile, (x, y))
 
