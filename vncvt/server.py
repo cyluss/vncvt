@@ -302,14 +302,22 @@ class RFBServer:
                     None if self._in_setup
                     else self.terminal.selection_normalized()
                 )
+                # Render on a worker thread so the event loop stays
+                # responsive for PTY reads, new connections, and
+                # control-socket traffic while Skia rasterizes glyphs.
+                # The _resize_lock is still held so the framebuffer
+                # isn't mutated concurrently by handle_resize.
                 rects = []
                 if dirty:
-                    rects = self.renderer.render_dirty(
-                        self._active_screen, dirty, selection=selection
+                    rects = await asyncio.to_thread(
+                        self.renderer.render_dirty,
+                        self._active_screen, dirty, selection,
                     )
 
                 # Always update cursor position
-                cursor_rect = self.renderer.render_cursor(self._active_screen)
+                cursor_rect = await asyncio.to_thread(
+                    self.renderer.render_cursor, self._active_screen,
+                )
                 if cursor_rect:
                     rects.append(cursor_rect)
 
