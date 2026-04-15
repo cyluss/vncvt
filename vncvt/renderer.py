@@ -107,32 +107,36 @@ _NO_UNDERLINE = frozenset(
 # ``apply_theme()``; modules like test_padding.py that import
 # DEFAULT_BG directly pick up whatever the current theme set.
 THEMES: dict[str, dict] = {
+    # All themes clear WCAG AAA (7:1); light/dark are at the 21:1 max.
+    # Amber and green are capped by the need to preserve hue identity
+    # — pushing a saturated hue past ~16:1 starts bleaching it toward
+    # yellow or mint, which is neither amber nor phosphor green.
     "amber": {
         "bg":     (0, 0, 0),
-        "fg":     (255, 176, 0),
-        "bold":   (255, 210, 40),
-        "cursor": (255, 176, 0),
+        "fg":     (255, 200, 0),   # 13.51:1, keeps amber hue
+        "bold":   (255, 230, 40),  # 15.87:1, brighter amber for bold
+        "cursor": (255, 200, 0),
         "ansi":   _AMBER_ANSI,
     },
-    "light": {  # black on white — highest perceived crispness
+    "light": {  # black on white — 21.00:1 (WCAG max)
         "bg":     (255, 255, 255),
         "fg":     (0, 0, 0),
         "bold":   (0, 0, 0),
         "cursor": (0, 0, 0),
         "ansi":   _LIGHT_ANSI,
     },
-    "dark": {  # white on black — classic
+    "dark": {  # pure white on black — 21.00:1 (WCAG max)
         "bg":     (0, 0, 0),
-        "fg":     (230, 230, 230),
+        "fg":     (255, 255, 255),
         "bold":   (255, 255, 255),
-        "cursor": (230, 230, 230),
+        "cursor": (255, 255, 255),
         "ansi":   _STD_ANSI,
     },
-    "green": {  # classic phosphor green
+    "green": {  # bright phosphor green — 16.31:1, keeps green hue
         "bg":     (0, 0, 0),
-        "fg":     (60, 255, 120),
-        "bold":   (120, 255, 160),
-        "cursor": (60, 255, 120),
+        "fg":     (120, 255, 120),
+        "bold":   (180, 255, 180),
+        "cursor": (120, 255, 120),
         "ansi":   _GREEN_ANSI,
     },
 }
