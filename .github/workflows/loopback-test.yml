@@ -15,6 +15,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Install system libraries for skia-python
+        # skia-python's manylinux wheel links against libEGL.so.1 /
+        # libGL.so.1 at import time. Ubuntu runners don't ship these
+        # by default, so importing vncvt/renderer.py fails without
+        # this step.
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgles2
+
       - name: Install dependencies (including dev group)
         run: uv sync --all-groups
 
@@ -56,13 +63,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Install system libraries for skia-python (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgles2
+
       - name: Install dependencies (with scene-match deps)
         run: uv sync --all-groups
 
       - name: Run loopback test
         run: |
           uv run --with vncdotool --with scikit-image \
-            pytest tests/test_loopback.py -v -m loopback
+            pytest tests/e2e/test_loopback.py -v -m loopback
 
       - name: Upload scene dumps
         if: always()
