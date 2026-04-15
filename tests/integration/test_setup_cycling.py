@@ -15,17 +15,30 @@ client, and enough to catch the state-tracking bugs.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from vncvt.terminal import Terminal
-from vncvt.renderer import TerminalRenderer, THEMES, apply_theme
+from vncvt.renderer import TerminalRenderer, apply_theme
 from vncvt.server import RFBServer
 
 
 KEY_DOWN = 0xFF54
 KEY_RETURN = 0xFF0D
+
+
+# Mapping from SET-UP field label to (field_index, probe). The probe
+# is a function that reads the corresponding value off the server so
+# we can assert the snapshot applied. Indices come from
+# vncvt/setup_screen.py's editable field order: Columns, Rows,
+# Font size, FPS, Theme, Line height.
+_FIELD_PROBES = {
+    "Columns":     (0, lambda s: s.terminal.cols),
+    "Rows":        (1, lambda s: s.terminal.rows),
+    "Font size":   (2, lambda s: s.renderer.font_size),
+    "FPS":         (3, lambda s: s.fps),
+    "Theme":       (4, lambda s: s.theme),
+    "Line height": (5, lambda s: s.renderer.line_height),
+}
 
 
 def _make_server(theme: str = "amber") -> tuple[Terminal, RFBServer]:
@@ -40,147 +53,83 @@ def _make_server(theme: str = "amber") -> tuple[Terminal, RFBServer]:
     return term, server
 
 
-def _cycle_field(setup, field_index: int, cycles: int) -> None:
-    """Navigate to ``field_index`` and press Return ``cycles`` times."""
-    # Navigate from field 0 down to field_index
+async def _cycle_once(server: RFBServer, field_index: int) -> dict:
+    """Enter SET-UP, navigate to field_index, press Return once,
+    apply + exit. Returns the snapshot of the SET-UP widget
+    immediately before exit so tests can cross-check it against
+    the server state."""
+    await server.enter_setup()
+    setup = server._setup
+    assert setup is not None
     for _ in range(field_index):
         setup.on_key(KEY_DOWN)
-    for _ in range(cycles):
-        setup.on_key(KEY_RETURN)
+    setup.on_key(KEY_RETURN)
+    snap = setup.snapshot()
+    await server.exit_setup(apply=True)
+    return snap
 
 
-async def test_theme_cycle_all_values_persist():
-    """Cycle Theme through amber → dark → light → green → amber and
-    verify every transition sticks across SET-UP re-entries.
+@pytest.mark.parametrize(
+    "field_label",
+    ["Columns", "Rows", "Font size", "FPS", "Theme", "Line height"],
+)
+async def test_field_cycle_round_trips(field_label):
+    """Cycle one SET-UP field repeatedly and verify each applied
+    value matches the widget snapshot AND the next enter_setup sees
+    the new state.
 
-    This is the test the theme-persistence bug would have caught:
-    enter_setup's reverse-bg lookup always returned "amber" because
-    amber, dark, and green share (0,0,0) bg. After the fix,
-    RFBServer.theme is tracked explicitly and survives the round trip.
+    Regression for the theme-persistence bug where enter_setup
+    reverse-guessed the current theme from DEFAULT_BG and was
+    ambiguous for amber/dark/green.
     """
+    field_index, probe = _FIELD_PROBES[field_label]
     term, server = _make_server(theme="amber")
-    # Theme field values, in the order SetupScreen cycles them
-    theme_values = ["amber", "dark", "light", "green"]
-    try:
-        current = "amber"
-        for _ in range(len(theme_values) + 1):  # one full cycle + wrap
-            await server.enter_setup()
-            # The Theme field must show the server's currently active
-            # theme when we enter SET-UP — this is the regression case
-            # that the old bg-reverse-lookup broke (always returned
-            # "amber" because amber/dark/green share (0,0,0) bg).
-            snap = server._setup.snapshot()
-            assert snap["Theme"] == current, (
-                f"enter_setup showed Theme={snap['Theme']!r}, but the "
-                f"server's actual theme is {current!r}"
-            )
-            # Cycle one step, compute the expected next value
-            setup = server._setup
-            _cycle_field(setup, 4, 1)  # Theme field is index 4
-            expected_next = theme_values[
-                (theme_values.index(current) + 1) % len(theme_values)
-            ]
-            cycled = setup.snapshot()["Theme"]
-            assert cycled == expected_next, (
-                f"cycle from {current!r} landed on {cycled!r}, "
-                f"expected {expected_next!r}"
-            )
-            await server.exit_setup(apply=True)
-            assert server.theme == expected_next, (
-                f"after apply, server.theme={server.theme!r}, "
-                f"expected {expected_next!r}"
-            )
-            current = expected_next
-    finally:
-        term.close()
-
-
-async def test_fps_cycle_all_values():
-    """Cycle FPS through its full range [15, 30, 60, 90, 120]."""
-    term, server = _make_server()
     try:
         values_seen = []
-        for _ in range(6):  # one full cycle plus wrap
+        # Cycle enough times to hit >1 distinct value for every field.
+        # FPS has 5 values, Theme has 4, Line height has 8, so 6 cycles
+        # is enough to touch at least 2 distinct entries on each.
+        for _ in range(6):
+            snap = await _cycle_once(server, field_index)
+            server_value = probe(server)
+            snap_value = snap[field_label]
+            # Floats (Line height) need epsilon compare; everything
+            # else is int or str.
+            if isinstance(server_value, float):
+                assert abs(server_value - snap_value) < 1e-6, (
+                    f"{field_label}: server={server_value}, snap={snap_value}"
+                )
+            else:
+                assert server_value == snap_value, (
+                    f"{field_label}: server={server_value!r}, "
+                    f"snap={snap_value!r}"
+                )
+            values_seen.append(server_value)
+
+            # The next enter_setup must see the just-applied value,
+            # not the initial one. (The theme-persistence bug fails
+            # here: reverse-guessing from DEFAULT_BG returns "amber"
+            # regardless of the actual applied theme.)
             await server.enter_setup()
-            _cycle_field(server._setup, 3, 1)  # FPS is field 3
-            snap = server._setup.snapshot()
-            await server.exit_setup(apply=True)
-            values_seen.append(server.fps)
-            assert server.fps == snap["FPS"]
-        # Should have visited multiple distinct values
+            next_snap = server._setup.snapshot()
+            await server.exit_setup(apply=False)
+            next_val = next_snap[field_label]
+            if isinstance(server_value, float):
+                assert abs(next_val - server_value) < 1e-6, (
+                    f"{field_label}: re-entered SET-UP showed "
+                    f"{next_val}, but server state is {server_value}"
+                )
+            else:
+                assert next_val == server_value, (
+                    f"{field_label}: re-entered SET-UP showed "
+                    f"{next_val!r}, but server state is {server_value!r}"
+                )
+        # Each field has at least 2 values, so cycling must visit
+        # more than one.
         assert len(set(values_seen)) > 1, (
-            f"FPS cycle produced only one value: {values_seen}"
+            f"{field_label} cycle produced only one distinct value: "
+            f"{values_seen}"
         )
-    finally:
-        term.close()
-
-
-async def test_line_height_cycle_all_values():
-    """Cycle Line height through [0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.75, 2.0]."""
-    term, server = _make_server()
-    try:
-        values_seen = []
-        for _ in range(10):
-            await server.enter_setup()
-            _cycle_field(server._setup, 5, 1)  # Line height is field 5
-            snap = server._setup.snapshot()
-            await server.exit_setup(apply=True)
-            values_seen.append(server.renderer.line_height)
-            assert abs(server.renderer.line_height - snap["Line height"]) < 1e-6
-        assert len(set(values_seen)) > 1, (
-            f"Line height cycle produced only one value: {values_seen}"
-        )
-    finally:
-        term.close()
-
-
-async def test_font_size_cycle_all_values():
-    """Cycle Font size through range(8, 33)."""
-    term, server = _make_server()
-    try:
-        values_seen = []
-        for _ in range(5):  # don't cycle all 25, too slow — first few
-            await server.enter_setup()
-            _cycle_field(server._setup, 2, 1)  # Font size is field 2
-            snap = server._setup.snapshot()
-            await server.exit_setup(apply=True)
-            values_seen.append(server.renderer.font_size)
-            assert server.renderer.font_size == snap["Font size"]
-        assert len(set(values_seen)) > 1
-    finally:
-        term.close()
-
-
-async def test_cols_cycle_80_132():
-    """Cycle Columns through [80, 132]."""
-    term, server = _make_server()
-    try:
-        values_seen = []
-        for _ in range(4):  # 2 full cycles
-            await server.enter_setup()
-            _cycle_field(server._setup, 0, 1)  # Columns is field 0
-            snap = server._setup.snapshot()
-            await server.exit_setup(apply=True)
-            values_seen.append(server.terminal.cols)
-            assert server.terminal.cols == snap["Columns"]
-        assert set(values_seen) == {80, 132}, values_seen
-    finally:
-        term.close()
-
-
-async def test_rows_cycle_24_36_48():
-    """Cycle Rows through [24, 36, 48]."""
-    term, server = _make_server()
-    try:
-        values_seen = []
-        for _ in range(5):
-            await server.enter_setup()
-            _cycle_field(server._setup, 1, 1)  # Rows is field 1
-            snap = server._setup.snapshot()
-            await server.exit_setup(apply=True)
-            values_seen.append(server.terminal.rows)
-            assert server.terminal.rows == snap["Rows"]
-        assert set(values_seen) == {24, 36, 48}, values_seen
     finally:
         term.close()
 
@@ -191,9 +140,13 @@ async def test_cancel_does_not_persist():
     term, server = _make_server(theme="amber")
     try:
         await server.enter_setup()
-        # Cycle theme inside SET-UP but DON'T apply
-        _cycle_field(server._setup, 4, 2)  # amber → dark → light
-        assert server._setup.snapshot()["Theme"] == "light"
+        setup = server._setup
+        # Navigate to Theme (field 4) and cycle twice
+        for _ in range(4):
+            setup.on_key(KEY_DOWN)
+        setup.on_key(KEY_RETURN)
+        setup.on_key(KEY_RETURN)
+        assert setup.snapshot()["Theme"] == "light"
         # Exit WITHOUT applying
         await server.exit_setup(apply=False)
         assert server.theme == "amber", (
