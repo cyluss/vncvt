@@ -684,6 +684,13 @@ async def test_claude_text_input_reaches_input_area(tmp_path):
         async with asyncvnc.connect(host=handle.host, port=handle.port) as vnc:
             await _wait_for_claude_welcome(vnc)
 
+            # Claude Code may show a "trust this folder?" prompt on
+            # first run from a new directory. The first option ("Yes,
+            # I trust") is highlighted by default — press Enter to
+            # accept. If there's no prompt this is a harmless no-op.
+            vnc.keyboard.press("Return")
+            await asyncio.sleep(1.0)
+
             # Type "hello" — keyboard.write is AsyncVNC's convenience wrapper
             # that presses each char one at a time. Each character goes to
             # claude's PTY input.
