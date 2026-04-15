@@ -1,6 +1,7 @@
 """Terminal-to-pixel rendering with VT220 amber-tinted color scheme."""
 
 import logging
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -92,6 +93,14 @@ AMBER_COLORS = dict(_AMBER_ANSI)
 _PYTE_COLOR_NAMES = [
     "black", "red", "green", "brown", "blue", "magenta", "cyan", "white",
 ]
+
+# Chars that should NEVER get an underline drawn under them, even if
+# the cell has underscore=True. Covers ASCII space, NBSP, and the
+# whole Unicode box-drawing block so separator rows don't produce a
+# visible dark band.
+_NO_UNDERLINE = frozenset(
+    [" ", "\xa0"] + [chr(c) for c in range(0x2500, 0x2580)]
+)
 
 # Theme palettes. The active one is installed into the module-level
 # DEFAULT_BG / DEFAULT_FG / BOLD_FG / CURSOR_COLOR constants by
@@ -342,11 +351,14 @@ class TerminalRenderer:
 
         # Measure character cell using advance width, not ink bbox.
         # getlength() returns the horizontal advance — the correct metric for
-        # grid layout in a monospace font.
-        self.cell_width = int(round(self.font.getlength("M")))
+        # grid layout in a monospace font. Use math.ceil so we always
+        # round UP; int(round()) can undersize the cell by ~0.5 px for
+        # fonts whose advance is fractional (SF Mono at 13pt → 7.8,
+        # rounded to 8, which leaves a sub-pixel gap every ~6 glyphs).
+        self.cell_width = math.ceil(self.font.getlength("M"))
         ascent, descent = self.font.getmetrics()
         font_cell_h = ascent + descent
-        self.cell_height = max(1, int(round(font_cell_h * self.line_height)))
+        self.cell_height = max(1, math.ceil(font_cell_h * self.line_height))
         self._x_offset = 0
         # Vertically center the glyph inside the expanded cell when
         # line_height > 1.0 so the extra space is shared above/below.
@@ -556,10 +568,18 @@ class TerminalRenderer:
                         fill=bg,
                     )
 
-                # Underline
-                if char.underscore:
+                # Underline — skip on whitespace and box-drawing cells.
+                # Claude Code (and some other TUIs) set the underscore
+                # attribute on whole rows of separator characters
+                # (`─`, spaces). Rendering a full-width underline bar
+                # under those produces a visible dark horizontal valley.
+                # For real text (URLs, prompts) the underline is still
+                # drawn in the cell's fg color.
+                if char.underscore and ch and ch not in _NO_UNDERLINE:
                     ul_y = y + self.cell_height - 2
-                    draw.line([x, ul_y, x + cell_px - 1, ul_y], fill=fg)
+                    draw.line(
+                        [x, ul_y, x + cell_px - 1, ul_y], fill=fg,
+                    )
 
                 if cells == 2:
                     skip_next = 1
