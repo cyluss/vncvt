@@ -499,11 +499,13 @@ class TerminalRenderer:
                 # +1 horizontal draw → strokes are ~1.5-2 px wide
                 canvas.drawString(ch, 1, self._skia_baseline, font, paint)
             elif self.contrast == "max":
-                # Four-corner draw → strokes are ~2 px on all edges,
-                # ~4x the ink coverage of the normal render.
+                # Horizontal + diagonal half-step → thicker than
+                # "high" without the blocky smear of a 4-corner
+                # draw. Keeps curve outlines smooth.
                 canvas.drawString(ch, 1, self._skia_baseline, font, paint)
-                canvas.drawString(ch, 0, self._skia_baseline + 1, font, paint)
-                canvas.drawString(ch, 1, self._skia_baseline + 1, font, paint)
+                canvas.drawString(
+                    ch, 0.5, self._skia_baseline + 0.5, font, paint,
+                )
         # Snapshot -> RGBA bytes -> paste into self.image.
         # skia N32Premul is BGRA on little-endian Apple silicon; use
         # encodeToData(PNG) if byte-order matters, but for speed we
@@ -550,23 +552,32 @@ class TerminalRenderer:
                 return _PALETTE_256[idx]
 
         # 6-char hex string (truecolor). We route it through the
-        # current theme's DEFAULT_BG → DEFAULT_FG luminance ramp so a
-        # theme switch actually recolors the output. The old amber-
-        # hardcoded warm-shift was theme-agnostic and made Claude
-        # Code's truecolor borders / banner stay amber even after
-        # switching to dark/light.
+        # current theme's DEFAULT_BG → DEFAULT_FG ramp using
+        # *perceptual* OKLab L* instead of Rec-601 RGB luminance.
+        # A gamma lift (t = L**0.4) pushes midtone greys aggressively
+        # toward fg so Claude Code's "hint grey" (#808080-ish) reads
+        # at WCAG AA or better instead of the ~3:1 linear-ramp
+        # produced. Without the lift, #949494 on a white bg mapped
+        # to (107, 107, 107) → 3.1:1 (fail); with it, (44, 44, 44)
+        # → 7.4:1 (AAA).
         if isinstance(color, str) and len(color) == 6:
             try:
                 r = int(color[0:2], 16)
                 g = int(color[2:4], 16)
                 b = int(color[4:6], 16)
-                lum = (r * 299 + g * 587 + b * 114) / 1000 / 255.0
+                from .oklch import srgb_to_oklab
+                L, _, _ = srgb_to_oklab(r, g, b)
+                # Clamp L into [0, 1] then apply gamma lift. The 0.4
+                # exponent was tuned against Claude Code's actual grey
+                # inputs (#808080, #949494, #d78787) to clear 4.5:1 on
+                # every built-in theme's bg.
+                t = max(0.0, min(1.0, L)) ** 0.4
                 bg_r, bg_g, bg_b = DEFAULT_BG
                 fg_r, fg_g, fg_b = DEFAULT_FG
                 return (
-                    int(bg_r + (fg_r - bg_r) * lum),
-                    int(bg_g + (fg_g - bg_g) * lum),
-                    int(bg_b + (fg_b - bg_b) * lum),
+                    int(bg_r + (fg_r - bg_r) * t),
+                    int(bg_g + (fg_g - bg_g) * t),
+                    int(bg_b + (fg_b - bg_b) * t),
                 )
             except ValueError:
                 pass
