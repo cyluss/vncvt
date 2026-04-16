@@ -5,9 +5,12 @@ To enable, run once from the repo root:
     git config core.hooksPath hooks
 
 Requires uv on PATH (https://docs.astral.sh/uv/).
-On Windows, delegates to WSL 2 automatically.
+On Windows, delegates to WSL 2 automatically. The venv is placed on
+the native Linux filesystem (~/.venvs/vncvt) to avoid slow /mnt/c
+I/O — first run installs packages (~5s), subsequent runs are instant.
 """
 
+import os
 import platform
 import subprocess
 import sys
@@ -15,6 +18,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests" / "unit"
+
+# Keep the venv on the Linux filesystem for fast I/O.
+_WSL_VENV = "$HOME/.venvs/vncvt"
 
 
 def main() -> int:
@@ -26,7 +32,9 @@ def main() -> int:
         posix = f"/mnt/{drive.lower()}{REPO.as_posix()[2:]}"
         result = subprocess.run(
             ["wsl", "bash", "-lc",
-             f"cd '{posix}' && uv run pytest tests/unit/ -q --tb=short"],
+             f"cd '{posix}' && "
+             f"UV_PROJECT_ENVIRONMENT={_WSL_VENV} "
+             f"uv run pytest tests/unit/ -q --tb=short"],
         )
     else:
         result = subprocess.run(
