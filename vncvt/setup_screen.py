@@ -105,7 +105,7 @@ class SetupScreen:
             _field("FPS", [15, 30, 60, 90, 120], initial.get("fps", 30)),
             _field(
                 "Theme",
-                ["amber", "dark", "light", "green", "powershell"],
+                ["amber", "green", "dark", "light", "c64", "dos", "atari"],
                 initial.get("theme", "amber"),
             ),
             _field(
@@ -120,7 +120,7 @@ class SetupScreen:
             ),
             _field(
                 "Color mode",
-                ["phosphor", "16-color", "256-color", "true-color"],
+                ["phosphor", "true-color"],
                 initial.get("color_mode", "phosphor"),
             ),
         ]

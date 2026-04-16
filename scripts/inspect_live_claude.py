@@ -108,7 +108,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--theme", default="light",
-        choices=("amber", "dark", "light", "green", "powershell"),
+        choices=("amber", "dark", "light", "green", "c64", "dos", "atari"),
     )
     parser.add_argument(
         "--min", type=float, default=4.5,

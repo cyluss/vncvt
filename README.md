@@ -4,11 +4,11 @@ VNC terminal server with a **warm amber VT220 aesthetic** by default. Serves an 
 
 ![amber](docs/screenshots/claude-code-amber.png)
 
-*Default theme: `amber` — warm amber phosphor on black. Four more themes (`green`, `light`, `dark`, `powershell`) in [docs/SHOWCASE.md](docs/SHOWCASE.md).*
+*Default theme: `amber` — warm amber phosphor on black. Six more themes (`green`, `dark`, `light`, `c64`, `dos`, `atari`) in [docs/SHOWCASE.md](docs/SHOWCASE.md).*
 
 - **Protocol**: RFB 3.3 / 3.7 / 3.8, VNC Authentication, raw + zlib encodings
 - **Terminal**: pyte VT100/VT102 emulator in a real PTY
-- **Rendering**: Skia TrueType hinting, LCD filtering, 16/256/24-bit color tiers
+- **Rendering**: Skia TrueType hinting, LCD filtering, phosphor single-hue or true-color palette
 - **Input**: full keyboard, Ctrl/Alt/Meta, paste, Shift+Tab, function keys
 - **Live config**: F3 SET-UP mode for theme, columns, font size, FPS without restart
 - **Recording**: asciinema v2 `.cast` format, replayable through vncvt's renderer
@@ -30,7 +30,7 @@ open "vnc://:PASSWORD@127.0.0.1"  # macOS Screen Sharing.app
 
 ## Themes
 
-Five built-in themes. Switch any of three ways:
+Seven built-in themes. Switch any of three ways:
 
 1. `--theme NAME` at launch
 2. `theme = "…"` in the config file
@@ -40,14 +40,12 @@ See [**docs/SHOWCASE.md**](docs/SHOWCASE.md) for per-theme screenshots, measured
 
 ## Color modes
 
-Four fidelity tiers (Windows 95 color-depth taxonomy). Only `true-color` renders TUI native palettes; the other three are theme-tinted.
+Two modes. Only `true-color` renders TUI native palettes; `phosphor` is theme-tinted.
 
-| Mode          | ANSI input                       | Truecolor input                   | Aesthetic            |
-|---------------|----------------------------------|-----------------------------------|----------------------|
-| `monochrome`  | Theme bg→fg OKLab ramp           | Same ramp                         | VT220 phosphor       |
-| `16-color` *(default)* | Theme ANSI 0–15, bg-aware snap | Snapped to nearest of 16  | EGA/CGA chunky       |
-| `256-color`   | Theme OKLCH 256 palette          | Theme ramp                        | VGA theme-tinted     |
-| `true-color`  | Standard xterm 256 palette       | Raw passthrough (fg keeps lift)   | Native — Claude Code in its own colors |
+| Mode                    | ANSI input                   | Truecolor input                 | Aesthetic                                   |
+|-------------------------|------------------------------|---------------------------------|---------------------------------------------|
+| `phosphor` *(default)*  | Theme phosphor palette       | OKLab ramp → theme primary hue  | Single-hue CRT — every intensity is a shade of the theme fg |
+| `true-color`            | Standard xterm 256 palette   | Raw passthrough (fg lifted)     | Native — Claude Code in its own colors      |
 
 Set via `--color-mode MODE`, the `color_mode =` config key, or F3 → `Color mode`.
 
@@ -69,12 +67,8 @@ Terminal:
 
 Rendering:
 
-- `--theme NAME` — `amber` (default), `green`, `light`, `dark`, `powershell`
-- `--color-mode MODE` — historical display tier (default: `phosphor`):
-  `phosphor` (VT220 single-hue, MDA/Hercules),
-  `16-color` (CGA/EGA multi-hue, theme-tinted),
-  `256-color` (VGA diminished chroma, theme-tinted),
-  `true-color` (native xterm + raw RGB)
+- `--theme NAME` — `amber` (default), `green`, `dark`, `light`, `c64`, `dos`, `atari`
+- `--color-mode MODE` — `phosphor` (default, single-hue CRT), `true-color` (native xterm + raw RGB)
 - `--contrast LEVEL` — `normal`, `high`, `max` (default). Drop to `normal` on hi-DPI
 - `--font PATH` — TTF font (default: SF Mono → DejaVu → vendored Terminus)
 - `--font-size SIZE` — points (default: 13)
@@ -93,7 +87,7 @@ Persistent defaults live at `~/.config/vncvt/config.toml` (or `$XDG_CONFIG_HOME/
 
 ```toml
 theme = "amber"
-color-mode = "16-color"
+color-mode = "phosphor"
 contrast = "max"
 font-size = 13
 line-height = 1.1
@@ -151,7 +145,7 @@ uv run python scripts/replay_cast.py /tmp/session.cast \
 Replay the same `.cast` in every theme:
 
 ```bash
-for theme in amber green light dark powershell; do
+for theme in amber green dark light c64 dos atari; do
   uv run python scripts/replay_cast.py /tmp/session.cast \
       --theme $theme --out /tmp/replay-$theme.png
 done

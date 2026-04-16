@@ -24,7 +24,7 @@ from PIL import Image
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SHOTS = _REPO_ROOT / "docs" / "screenshots"
-_THEMES = ["amber", "dark", "light", "green", "powershell"]
+_THEMES = ["amber", "dark", "light", "green", "c64", "dos", "atari"]
 
 
 def _srgb_to_linear(c: float) -> float:

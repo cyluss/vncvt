@@ -44,7 +44,7 @@ def test_replay_frames_yields_n():
 
 
 @pytest.mark.parametrize(
-    "theme", ["light", "dark", "amber", "green", "powershell"]
+    "theme", ["light", "dark", "amber", "green", "c64", "dos", "atari"]
 )
 def test_claude_row0_readable(theme):
     frame = replay_cast(FIXTURE, theme=theme)

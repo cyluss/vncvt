@@ -119,10 +119,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--theme", default=cfg("theme", "amber"), choices=sorted(THEMES),
-        help="Color palette (default: amber). amber = amber phosphor "
-             "on black; dark = white on black; light = black on white; "
-             "green = classic phosphor green; powershell = off-white "
-             "on navy.",
+        help="Display theme (default: amber). Phosphor CRTs: amber "
+             "(VT220), green (IBM 3270), dark (white phosphor), light "
+             "(paper-white). 8-bit/PC: c64 (Commodore 64), dos (CGA "
+             "dark blue), atari (Atari 8-bit GTIA orange).",
     )
     parser.add_argument(
         "--line-height", type=float, default=cfg("line_height", 1.1),
@@ -141,16 +141,12 @@ def main() -> None:
     parser.add_argument(
         "--color-mode", dest="color_mode",
         default=cfg("color_mode", "phosphor"),
-        choices=("phosphor", "16-color", "256-color", "true-color"),
-        help="Color fidelity tier, anchored to a PC display era. "
-             "phosphor (default, VT220/MDA 1981): single-hue theme "
-             "ramp — VT220-faithful, 16 intensity shades. "
-             "16-color (CGA/EGA 1981): 16 theme-biased distinct hues. "
-             "256-color (VGA Mode 13h 1987): theme's CGA 0-15 plus a "
-             "desaturated 216-cube and bg→fg grey ramp. "
-             "true-color (Win95/ISO 8613-6): standard xterm palette + "
-             "raw RGB passthrough — the only mode that shows Claude "
-             "Code's native colors unaltered.",
+        choices=("phosphor", "true-color"),
+        help="Color fidelity (default: phosphor). phosphor: every ANSI "
+             "color collapses to the theme's single hue — the authentic "
+             "CRT phosphor aesthetic. true-color: standard xterm palette "
+             "for ANSI + raw RGB passthrough — shows Claude Code's "
+             "native colors unaltered.",
     )
     parser.add_argument(
         "--fps", type=int, default=cfg("fps", 15),

@@ -25,10 +25,10 @@ FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisib
 
 
 @pytest.mark.parametrize(
-    "mode", ["phosphor", "16-color", "256-color", "true-color"]
+    "mode", ["phosphor", "true-color"]
 )
 @pytest.mark.parametrize(
-    "theme", ["light", "dark", "amber", "green", "powershell"]
+    "theme", ["light", "dark", "amber", "green", "c64", "dos", "atari"]
 )
 def test_color_mode_contrast(mode, theme):
     """No matter which color_mode we pick, no non-space cell should
@@ -55,22 +55,6 @@ def test_standard_palette_256_shape():
     assert _STANDARD_PALETTE_256[9] == (255, 0, 0)
     assert _STANDARD_PALETTE_256[15] == (255, 255, 255)
 
-
-def test_true_color_and_256color_differ_on_amber():
-    """``true-color`` uses the standard xterm palette for ANSI input
-    while ``256-color`` uses the theme's warm-biased VGA palette with
-    diminished chroma. On the amber theme these must produce visibly
-    different output because the 256-color palette has each cube
-    entry blended toward the theme bg/fg midpoint."""
-    tc = replay_cast(FIXTURE, theme="amber", color_mode="true-color")
-    tt = replay_cast(FIXTURE, theme="amber", color_mode="256-color")
-    tc_bytes = tc.image.convert("RGB").tobytes()
-    tt_bytes = tt.image.convert("RGB").tobytes()
-    diff = sum(abs(a - b) for a, b in zip(tc_bytes, tt_bytes))
-    assert diff > 1000, (
-        f"true-color and 256-color renders should differ visibly on "
-        f"amber, but sum-abs-diff is only {diff}"
-    )
 
 
 def test_phosphor_collapses_hues_on_amber():

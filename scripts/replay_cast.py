@@ -30,7 +30,7 @@ def main() -> int:
     parser.add_argument("cast_path", type=Path)
     parser.add_argument(
         "--theme", default="light",
-        choices=("amber", "dark", "light", "green", "powershell"),
+        choices=("amber", "dark", "light", "green", "c64", "dos", "atari"),
     )
     parser.add_argument("--at", default="end",
                         help="Seconds from start, or 'end' (default).")

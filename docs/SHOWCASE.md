@@ -1,6 +1,6 @@
 # Theme showcase
 
-Five built-in themes, each with an OKLCH-generated 16-color ANSI palette at uniform perceived lightness. All clear WCAG AAA at peak contrast; body-text modal contrast clears AA on every theme.
+Seven built-in themes in two categories: **phosphor CRT types** (amber, green, dark, light) and **8-bit/PC color schemes** (c64, dos, atari). All clear WCAG AAA at peak contrast; body-text modal contrast clears AA on every theme.
 
 All screenshots capture Claude Code's welcome panel at 80×24, SF Mono 13pt, `line-height 1.1`, `contrast max`, `color-mode phosphor` (the runtime defaults).
 
@@ -60,37 +60,59 @@ Generated, not hand-tuned, but at low lightness (`base_l=0.40`) so dark-red / da
 
 The "modern terminal" theme. Unlike amber/green/light, this one's generated at high lightness, so every ANSI slot pops as its own hue. More xterm than VT220.
 
-## `powershell` — off-white on navy `#012456`
+## `c64` — Commodore 64 BASIC (Pepto NTSC)
 
-![powershell](screenshots/claude-code-powershell.png)
+![c64](screenshots/claude-code-c64.png)
 
 | Metric | Value |
 |---|---|
-| Background | `#012456` (Windows PowerShell classic navy) |
-| Body text | `#EEEDF0` off-white |
-| Modal contrast | **11.00:1** |
-| Peak contrast | 12.97:1 |
-| Palette style | OKLCH `base_l=0.78, bright_l=0.92, chroma=0.17` — same params as `dark`, different bg |
+| Background | `#352879` (53, 40, 121) — Commodore dark purple |
+| Body text | `#AAAAFF` (170, 170, 255) — boosted light blue |
+| Bold | `#C8C8FF` (200, 200, 255) |
+| Palette style | `_C64_PHOSPHOR` — blue-purple single-hue ramp, b≥r≥g invariant |
 
-Shares the OKLCH parameters with `dark`, so the 16 ANSI hues are identical in RGB — only the bg color differs. On navy, Claude Code's ANSI 1 (red) borders read as a striking warm-red; on `dark` the same slot blends into the black bg.
+Based on the Pepto NTSC palette for the C64. The authentic screen fg `#706DEB` gives 3:1 against the Commodore bg — just below WCAG AA. The palette uses `#AAAAFF` (4.94:1) to clear AA while preserving the blue-on-blue character of the original.
+
+## `dos` — CGA dark blue (WordPerfect / Norton Commander)
+
+![dos](screenshots/claude-code-dos.png)
+
+| Metric | Value |
+|---|---|
+| Background | `#0000AA` (0, 0, 170) — CGA color 1 dark blue |
+| Body text | `#FFFFFF` (255, 255, 255) — white (16.9:1 AAA) |
+| Bold | `#FFFF55` (255, 255, 85) — CGA bright yellow, DOS emphasis |
+| Palette style | `_DOS_PHOSPHOR` — cool-white ramp from navy to white, b≥r=g invariant |
+
+The classic DOS full-screen application bg: WordPerfect 5.1, Norton Commander, Turbo C, QBasic all used CGA color 1 (`#0000AA`) as their primary background.
+
+## `atari` — Atari 8-bit GTIA register $2C
+
+![atari](screenshots/claude-code-atari.png)
+
+| Metric | Value |
+|---|---|
+| Background | `#000000` — black |
+| Body text | `#FDC170` (253, 193, 112) — GTIA hue 2, luminance 6 (13.4:1 AAA) |
+| Bold | `#FFDCA0` (255, 220, 160) |
+| Palette style | `_ATARI_PHOSPHOR` — warm orange ramp, r≥g≥b invariant |
+
+Colors sourced from the Lospec `atari-8-bit-family-gtia` palette. GTIA register $2C = hue 2 (orange-gold family), luminance 6 — the canonical "Atari warm orange" used on 800XL and 130XE systems.
 
 ## Palette taxonomy
 
 Color is picked by two orthogonal knobs: **`--theme`** (aesthetic
-family, bg/fg/hue) and **`--color-mode`** (fidelity tier, how ANSI
-and truecolor inputs map onto that hue family). Each tier is anchored
-to a specific PC display era:
+family, bg/fg/hue) and **`--color-mode`** (how ANSI and truecolor
+inputs map onto that hue family):
 
-| Tier | Anchor | What it renders |
+| Mode | Anchor | What it renders |
 |---|---|---|
-| `phosphor` *(default)* | VT220 / MDA / Hercules (1981–83) | Single-hue, 16 intensity shades of the theme's primary hue. Every ANSI slot collapses into the theme's warm/green/navy/grey family — SGR index becomes a brightness cue, not a hue cue. |
-| `16-color` | CGA / EGA (1981 / 1984) | 16 distinct hues (red, green, blue, yellow, magenta, cyan + brights), each rotated up to 30° toward the theme's primary hue. Still recognizably multi-hue, but with a family resemblance to the theme. |
-| `256-color` | VGA Mode 13h (1987) | 256 slots: CGA 16 + xterm 6×6×6 cube (blended 40% toward the theme bg/fg midpoint for diminished chroma) + 24 greys along the theme's OKLab bg→fg axis. Hue intent survives; theme personality still comes through. |
-| `true-color` | Win95 True Color / ISO 8613-6 (1995 / 2012+) | Raw passthrough. ANSI indices resolve via the standard xterm 256 table; 24-bit escapes render as raw RGB for bg (fg still lifted through the OKLab ramp for readability). The only tier where Claude Code's native palette renders faithfully. |
+| `phosphor` *(default)* | VT220 / MDA / Hercules (1981–83) | Single-hue, 16 intensity shades of the theme's primary hue. Every ANSI slot collapses into the theme's warm/green/navy/grey/blue family — SGR index becomes a brightness cue, not a hue cue. |
+| `true-color` | 24-bit color (1995+) | Raw passthrough. ANSI indices resolve via the standard xterm 256 table; 24-bit escapes render as raw RGB for bg (fg still lifted through the OKLab ramp for readability). The only mode where Claude Code's native palette renders faithfully. |
 
 ### Mode × theme matrix
 
-Every (theme, mode) pair is a valid rendering — 5 themes × 4 tiers = 20 combinations. The default is `phosphor` on `amber`, a software approximation of a 1983 DEC VT220. Switch to `--color-mode true-color` to keep the theme's bg while letting Claude Code's native hues pass through.
+Every (theme, mode) pair is a valid rendering — 7 themes × 2 modes = 14 combinations. The default is `phosphor` on `amber`, a software approximation of a 1983 DEC VT220. Switch to `--color-mode true-color` to keep the theme's bg while letting Claude Code's native hues pass through.
 
 See [`docs/design-color.md`](design-color.md) for the full tier
 definitions, OKLCH rationale, and per-theme WCAG measurements.
@@ -117,5 +139,5 @@ Captures are timing-sensitive because Claude's welcome panel paints asynchronous
 ```python
 import asyncio
 from scripts.refresh_showcase import capture_theme
-asyncio.run(capture_theme('powershell'))
+asyncio.run(capture_theme('atari'))
 ```

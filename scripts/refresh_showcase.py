@@ -51,11 +51,13 @@ OUTPUT_DIR = _REPO_ROOT / "docs" / "screenshots"
 # suffix tells Claude Code to emit plain SGR ANSI codes (not truecolor
 # hex) so vncvt's per-theme ANSI palette drives the final colors.
 VNCVT_TO_CLAUDE_THEME = {
-    "amber":      "dark-ansi",
-    "dark":       "dark-ansi",
-    "green":      "dark-ansi",
-    "powershell": "dark-ansi",
-    "light":      "light-ansi",
+    "amber":  "dark-ansi",
+    "dark":   "dark-ansi",
+    "green":  "dark-ansi",
+    "light":  "light-ansi",
+    "c64":    "dark-ansi",
+    "dos":    "dark-ansi",
+    "atari":  "dark-ansi",
 }
 
 
