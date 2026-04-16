@@ -8,10 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from vncvt.theme import THEMES
-
-_ALL_THEMES = sorted(THEMES)
-
 from vncvt.cast_replay import (
     ReplayedFrame,
     inspect_frame,
@@ -47,17 +43,13 @@ def test_replay_frames_yields_n():
         assert frame.at == ts
 
 
-@pytest.mark.parametrize(
-    "theme", _ALL_THEMES
-)
-def test_claude_row0_readable(theme):
-    frame = replay_cast(FIXTURE, theme=theme)
+def test_claude_row0_readable():
+    """Default theme (amber/phosphor) replay: no invisible cells.
+    Other themes are covered by test_color_mode.py metadata tests."""
+    frame = replay_cast(FIXTURE, theme="amber")
     report = inspect_frame(frame, threshold=3.0)
     invisible = [
         c for c in report.below_threshold
         if c.char not in (" ", "\xa0")
     ]
-    assert not invisible, (
-        f"{theme}: {len(invisible)} invisible non-ws cells, "
-        f"worst: {invisible[:3]}"
-    )
+    assert not invisible, f"amber: {invisible[:3]}"

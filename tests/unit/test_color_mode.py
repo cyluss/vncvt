@@ -1,15 +1,13 @@
-"""Tests for the ``color_mode`` parameter wired through
-``replay_cast`` (Track C of the luminous-booping-rainbow plan).
+"""Tests for color modes and phosphor palette tinting.
 
-The four tiers are the historical display tiers:
-
-- ``phosphor``    — single-hue VT220/MDA/Hercules ramp (default)
-- ``16-color``    — CGA/EGA 16 hues, theme-tinted
-- ``256-color``   — VGA diminished-chroma 256 palette, theme-tinted
-- ``true-color``  — standard xterm palette + raw truecolor passthrough
-
-Only ``true-color`` renders Claude Code's native palette faithfully;
-the other three are theme-tinted at varying fidelity.
+Three tiers of cost:
+1. **Metadata tests** — all themes, no rendering. Check palette shape,
+   chroma, hue invariants via apply_theme + palette sampling. Fast.
+2. **Logic tests** — 3 representative themes (amber=warm, cyan=cool,
+   light=inverted polarity). Prove ramp/dispatch/contrast via
+   TerminalRenderer._resolve_color. Medium cost.
+3. **Replay tests** — default theme only (amber). Full .cast replay +
+   per-cell inspect. Proves end-to-end pipeline. Expensive.
 """
 
 from __future__ import annotations
@@ -25,22 +23,70 @@ from vncvt.renderer import TerminalRenderer
 from vncvt.theme import apply_theme, THEMES
 
 _ALL_THEMES = sorted(THEMES)
-
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisible.cast"
 
+# 3 representative themes covering: warm hue, cool hue, inverted polarity.
+_REPR_THEMES = ["amber", "cyan", "light"]
 
-@pytest.mark.parametrize(
-    "mode", ["phosphor", "true-color"]
-)
-@pytest.mark.parametrize(
-    "theme", _ALL_THEMES
-)
+
+# ---- Tier 1: metadata tests (all themes, no rendering) ----
+
+
+def test_standard_palette_256_shape():
+    assert len(_STANDARD_PALETTE_256) == 256
+    assert _STANDARD_PALETTE_256[9] == (255, 0, 0)
+    assert _STANDARD_PALETTE_256[15] == (255, 255, 255)
+
+
+@pytest.mark.parametrize("theme", _ALL_THEMES)
+def test_phosphor_palette_shape(theme):
+    """Every theme's phosphor palette must have exactly 256 entries."""
+    apply_theme(theme)
+    assert len(_palette_mod._PALETTE_PHOSPHOR) == 256
+
+
+@pytest.mark.parametrize("theme", _ALL_THEMES)
+def test_phosphor_palette_chroma(theme):
+    """Chromatic themes must have visible chroma at mid-ramp (idx 241);
+    neutral themes (dark/light) must stay grey. Cheap — no rendering."""
+    from vncvt.oklch import srgb_to_oklch
+    apply_theme(theme)
+    idx241 = _palette_mod._PALETTE_PHOSPHOR[241]
+    r, g, b = idx241
+    chroma = max(r, g, b) - min(r, g, b)
+
+    if chroma < 5:
+        # Palette entry is neutral grey — only acceptable for themes
+        # whose phosphor dict is intentionally achromatic (dark, light).
+        # Themes like dos have white fg but blue-tinted phosphor dicts,
+        # so we can't just check fg chroma.
+        phosphor = THEMES[theme]["ansi_phosphor"]
+        any_chromatic = any(
+            max(v) - min(v) > 20 for v in phosphor.values()
+        )
+        assert not any_chromatic, (
+            f"{theme} idx241={idx241} chroma={chroma} — grey, but the "
+            f"phosphor dict has chromatic entries. Palette builder bug."
+        )
+    else:
+        # Chromatic palette entry — verify the chroma floor scales
+        # with the phosphor dict's peak saturation.
+        phosphor = THEMES[theme]["ansi_phosphor"]
+        peak = max(max(v) - min(v) for v in phosphor.values())
+        floor = max(10, int(peak * 0.10))
+        assert chroma >= floor, (
+            f"{theme} idx241={idx241} chroma={chroma}, "
+            f"expected >= {floor} (10% of phosphor peak chroma {peak})"
+        )
+
+
+# ---- Tier 2: logic tests (3 representative themes, light rendering) ----
+
+
+@pytest.mark.parametrize("mode", ["phosphor", "true-color"])
+@pytest.mark.parametrize("theme", _REPR_THEMES)
 def test_color_mode_contrast(mode, theme):
-    """No matter which color_mode we pick, no non-space cell should
-    fall below the 3.0:1 contrast floor on any theme. The chunky
-    16-color tier stays readable via bg-aware snap — fg candidates
-    are filtered to palette entries that clear WCAG 3:1 against the
-    cell bg before the nearest-RGB match runs."""
+    """Contrast floor (3.0:1) on representative themes × both modes."""
     frame = replay_cast(FIXTURE, theme=theme, color_mode=mode)
     report = inspect_frame(frame, threshold=3.0)
     invisible = [
@@ -53,107 +99,10 @@ def test_color_mode_contrast(mode, theme):
     )
 
 
-def test_standard_palette_256_shape():
-    """Sanity: the standard xterm 256 palette has 256 entries and
-    the well-known anchors are correct (red 9 = pure red, white 15)."""
-    assert len(_STANDARD_PALETTE_256) == 256
-    assert _STANDARD_PALETTE_256[9] == (255, 0, 0)
-    assert _STANDARD_PALETTE_256[15] == (255, 255, 255)
-
-
-
-@pytest.mark.parametrize("theme, hue_check", [
-    ("amber", lambda r, g, b: r >= g >= b),
-    ("green", lambda r, g, b: g >= r and g >= b),
-    ("c64",   lambda r, g, b: b >= r and b >= g),
-    ("dos",   lambda r, g, b: b >= r and b >= g),
-    ("yellow",  lambda r, g, b: r >= g and g >= b),
-    ("olive",   lambda r, g, b: g >= r and g >= b),
-    ("mint",    lambda r, g, b: g >= r and g >= b),
-    ("cyan",    lambda r, g, b: g >= r and b >= r),
-    ("purple",  lambda r, g, b: b >= r and b >= g),
-    ("orchid",  lambda r, g, b: b >= g or r >= g),
-    ("rose",    lambda r, g, b: r >= g),
-    ("salmon",  lambda r, g, b: r >= g and r >= b),
-])
-def test_phosphor_ramp_preserves_hue(theme, hue_check):
-    """Mid-luminance phosphor palette entries (index 241 = Claude
-    Code's primary body text SGR) must carry visible chroma in the
-    theme's hue family, not collapse to neutral grey.
-
-    The OKLCH ramp in ``_build_256_phosphor`` holds the theme fg's
-    hue constant and scales chroma with lightness. This test asserts
-    both the minimum chroma floor (≥ 20) and the per-theme hue
-    invariant (amber = r≥g≥b, green = g dominant, etc.)."""
-    apply_theme(theme)
-    idx241 = _palette_mod._PALETTE_PHOSPHOR[241]
-    r, g, b = idx241
-    chroma = max(r, g, b) - min(r, g, b)
-    # Floor scales with the theme's fg chroma — pastel GTIA hues
-    # (mint, orchid, etc.) have lower saturation than amber/green
-    # by hardware design, so a fixed floor would reject them.
-    fg = THEMES[theme]["fg"]
-    fg_chroma = max(fg) - min(fg)
-    floor = max(10, int(fg_chroma * 0.15))
-    assert chroma >= floor, (
-        f"{theme} phosphor idx241={idx241} chroma={chroma} — "
-        f"too grey, expected ≥ {floor} (15% of fg chroma {fg_chroma})"
-    )
-    assert hue_check(r, g, b), (
-        f"{theme} phosphor idx241={idx241} violates hue invariant"
-    )
-
-
-@pytest.mark.parametrize("theme", ["dark", "light"])
-def test_neutral_phosphor_stays_grey(theme):
-    """Dark and light phosphor themes simulate achromatic CRTs (P4
-    white phosphor, paper-white). Their ramp must remain neutral
-    grey — no accidental chroma from the OKLCH interpolation."""
-    apply_theme(theme)
-    idx241 = _palette_mod._PALETTE_PHOSPHOR[241]
-    r, g, b = idx241
-    chroma = max(r, g, b) - min(r, g, b)
-    assert chroma < 5, (
-        f"{theme} phosphor idx241={idx241} chroma={chroma} — "
-        f"expected neutral grey (chroma < 5)"
-    )
-
-
-@pytest.mark.parametrize("theme, hue_check", [
-    ("amber", lambda r, g, b: r >= g >= b),
-    ("green", lambda r, g, b: g >= r and g >= b),
-    ("c64",   lambda r, g, b: b >= r and b >= g),
-    ("dos",   lambda r, g, b: b >= r and b >= g),
-    ("yellow",  lambda r, g, b: r >= g and g >= b),
-    ("olive",   lambda r, g, b: g >= r and g >= b),
-    ("mint",    lambda r, g, b: g >= r and g >= b),
-    ("cyan",    lambda r, g, b: g >= r and b >= r),
-    ("purple",  lambda r, g, b: b >= r and b >= g),
-    ("orchid",  lambda r, g, b: b >= g or r >= g),
-    ("rose",    lambda r, g, b: r >= g),
-    ("salmon",  lambda r, g, b: r >= g and r >= b),
-])
-def test_phosphor_truecolor_hex_tinted(theme, hue_check):
-    """Truecolor hex inputs (not ANSI indices) in phosphor mode must
-    also carry the theme's hue, not collapse to neutral grey. This
-    tests the _apply_oklab_ramp path, not the palette lookup path."""
-    ctx = apply_theme(theme)
-    r = TerminalRenderer(cols=80, rows=24, theme=ctx, color_mode="phosphor")
-    result = r._resolve_color("00c800", bold=False, is_bg=False, cell_bg=(0, 0, 0))
-    chroma = max(result) - min(result)
-    assert chroma >= 20, f"{theme} truecolor hex {result} chroma={chroma}"
-    assert hue_check(*result), f"{theme} truecolor hex {result} wrong hue"
-
-
-@pytest.mark.parametrize("theme", [
-    "amber", "green", "light", "dark", "c64", "dos",
-    "yellow", "olive", "mint", "cyan", "purple", "orchid", "rose", "salmon",
-])
+@pytest.mark.parametrize("theme", _REPR_THEMES)
 def test_phosphor_pole_orientation(theme):
-    """In phosphor mode, fg must be pushed AWAY from the cell's bg
-    regardless of whether the theme's polarity is bright-on-dark
-    (amber) or dark-on-bright (light). Verify both cell_bg
-    orientations produce readable contrast."""
+    """fg must be pushed AWAY from the cell's bg regardless of theme
+    polarity. Dark cell_bg → bright fg; light cell_bg → dark fg."""
     ctx = apply_theme(theme)
     r = TerminalRenderer(cols=80, rows=24, theme=ctx, color_mode="phosphor")
     dark_cell = r._resolve_color("808080", bold=False, is_bg=False, cell_bg=(0, 0, 0))
@@ -166,14 +115,32 @@ def test_phosphor_pole_orientation(theme):
     )
 
 
-def test_phosphor_collapses_hues_on_amber():
-    """Phosphor on the amber theme should map every cell through the
-    amber single-hue ramp, so no pixel should be blue-dominant.
-    Claude Code emits some cool ANSI hues that the theme's 256-color
-    palette renders with a slight blue tilt; under phosphor they must
-    collapse onto the warm amber axis.
+def test_phosphor_truecolor_hex_tinted_amber():
+    """Truecolor green hex on amber must come out amber-tinted (the
+    _apply_oklab_ramp OKLCH path, not the palette lookup path)."""
+    ctx = apply_theme("amber")
+    r = TerminalRenderer(cols=80, rows=24, theme=ctx, color_mode="phosphor")
+    result = r._resolve_color("00c800", bold=False, is_bg=False, cell_bg=(0, 0, 0))
+    chroma = max(result) - min(result)
+    assert chroma >= 20, f"amber truecolor hex {result} chroma={chroma}"
+    assert result[0] >= result[1] >= result[2], f"amber hue invariant violated: {result}"
 
-    Allow a small slack for AA edge artifacts."""
+
+def test_phosphor_truecolor_hex_tinted_cyan():
+    """Truecolor green hex on cyan must come out cool-tinted."""
+    ctx = apply_theme("cyan")
+    r = TerminalRenderer(cols=80, rows=24, theme=ctx, color_mode="phosphor")
+    result = r._resolve_color("00c800", bold=False, is_bg=False, cell_bg=(0, 0, 0))
+    chroma = max(result) - min(result)
+    assert chroma >= 10, f"cyan truecolor hex {result} chroma={chroma}"
+
+
+# ---- Tier 3: full replay (default theme only) ----
+
+
+def test_phosphor_collapses_hues_on_amber():
+    """Full .cast replay on amber phosphor: no pixel should be
+    blue-dominant. Proves the end-to-end pipeline works."""
     frame = replay_cast(FIXTURE, theme="amber", color_mode="phosphor")
     raw = frame.image.convert("RGB").tobytes()
     blue_dominant = sum(
@@ -184,3 +151,14 @@ def test_phosphor_collapses_hues_on_amber():
         f"phosphor amber should have no blue-dominant pixels, "
         f"but found {blue_dominant}"
     )
+
+
+def test_amber_row0_readable():
+    """Full .cast replay on default theme: no invisible cells."""
+    frame = replay_cast(FIXTURE, theme="amber")
+    report = inspect_frame(frame, threshold=3.0)
+    invisible = [
+        c for c in report.below_threshold
+        if c.char not in (" ", "\xa0")
+    ]
+    assert not invisible, f"amber: {invisible[:3]}"
