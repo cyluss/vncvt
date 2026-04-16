@@ -28,19 +28,25 @@ _BRIGHT_MAP = {
 
 def _build_256_phosphor(
     ansi16: dict[str, tuple[int, int, int]],
+    theme_fg: tuple[int, int, int] | None = None,
 ) -> list[tuple[int, int, int]]:
     """Build a phosphor-mode 256-slot palette.
 
     Slots 0-15: verbatim phosphor entries (already single-hue).
     Slots 16-231: xterm 6x6x6 cube collapsed onto the single-hue
-      brightness ramp by mapping each entry's perceived luminance to
-      the palette's black->brightwhite axis. RGB blending (as used by
-      ``_build_256_from_ansi16``) can't be used here because high-B
-      xterm cube entries would keep enough blue to be blue-dominant
-      after the blend, violating the single-hue invariant.
-    Slots 232-255: linear interpolation on the black->brightwhite ramp
-      (same as ``_build_256_from_ansi16``).
+      ramp.  Interpolation is in **OKLCH** with the theme's hue
+      and chroma held constant, varying only lightness.  This keeps
+      mid-luminance entries visibly tinted instead of the grey-ish
+      mid-tones a linear-RGB ramp produces.
+    Slots 232-255: same OKLCH interpolation for the greyscale ramp.
+
+    ``theme_fg`` is the theme's DEFAULT_FG, used as the hue/chroma
+    anchor for the ramp.  It carries more saturation than the
+    phosphor dict's ``brightwhite`` entry (which is bleached toward
+    white by design).  If None, falls back to ``brightwhite``.
     """
+    from .oklch import srgb_to_oklch, oklch_to_srgb, srgb_to_oklab
+
     palette: list[tuple[int, int, int]] = []
     for name in _PYTE_COLOR_NAMES:
         palette.append(ansi16[name])
@@ -48,22 +54,45 @@ def _build_256_phosphor(
         palette.append(ansi16[_BRIGHT_MAP[name]])
 
     black = ansi16["black"]
-    white = ansi16["brightwhite"]
+    # Use the theme's primary fg as the hue/chroma anchor — it's
+    # typically the most saturated representative of the theme's hue
+    # identity. Fall back to the most chromatic entry in the phosphor
+    # dict when theme_fg is achromatic (e.g. dos theme has pure-white
+    # fg but a blue-tinted phosphor dict).
+    hue_ref = theme_fg if theme_fg is not None else ansi16["brightwhite"]
+    _, ref_C, ref_H = srgb_to_oklch(*hue_ref)
+
+    if ref_C < 0.02:
+        # theme_fg is near-neutral — scan the phosphor dict for the
+        # entry with the highest OKLCH chroma and use that as the
+        # hue/chroma anchor instead.
+        best_C, best_H = 0.0, 0.0
+        for entry in ansi16.values():
+            _, c, h = srgb_to_oklch(*entry)
+            if c > best_C:
+                best_C, best_H = c, h
+        ref_C, ref_H = best_C, best_H
+
+    black_L, _, _ = srgb_to_oklch(*black)
+
+    # The lightness endpoint is still brightwhite (the phosphor's
+    # peak brightness) even though we take hue/chroma from theme_fg.
+    fg = ansi16["brightwhite"]
+    fg_L, _, _ = srgb_to_oklch(*fg)
 
     def _lum_to_ramp(r: int, g: int, b: int) -> tuple[int, int, int]:
-        """Map sRGB luminance of (r,g,b) onto the black->white ramp."""
-        lin = lambda v: (v / 255.0 / 12.92 if v / 255.0 <= 0.04045
-                         else ((v / 255.0 + 0.055) / 1.055) ** 2.4)
-        lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-        # Gamma lift (matches _apply_oklab_ramp's 0.4 exponent) so
-        # mid-luminance inputs land in the readable midrange rather
-        # than clustering near black.
-        t = min(1.0, max(0.0, lum)) ** 0.4
-        return (
-            int(black[0] + (white[0] - black[0]) * t),
-            int(black[1] + (white[1] - black[1]) * t),
-            int(black[2] + (white[2] - black[2]) * t),
-        )
+        """Map input luminance onto the OKLCH phosphor ramp."""
+        L_in, _, _ = srgb_to_oklab(r, g, b)
+        # Gamma lift so mid-luminance inputs land in the readable
+        # midrange (matches _apply_oklab_ramp's 0.4 exponent).
+        t = min(1.0, max(0.0, L_in)) ** 0.4
+        # Interpolate L between the black and fg endpoints.
+        out_L = black_L + (fg_L - black_L) * t
+        # Keep the theme's hue and chroma constant; scale chroma
+        # proportionally with lightness so near-black entries don't
+        # over-saturate (which would clip in sRGB).
+        out_C = ref_C * t
+        return oklch_to_srgb(out_L, out_C, ref_H)
 
     levels = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
     for r in levels:
@@ -73,11 +102,9 @@ def _build_256_phosphor(
 
     for i in range(24):
         t = i / 23.0
-        palette.append((
-            int(black[0] + (white[0] - black[0]) * t),
-            int(black[1] + (white[1] - black[1]) * t),
-            int(black[2] + (white[2] - black[2]) * t),
-        ))
+        out_L = black_L + (fg_L - black_L) * t
+        out_C = ref_C * t
+        palette.append(oklch_to_srgb(out_L, out_C, ref_H))
     return palette
 
 

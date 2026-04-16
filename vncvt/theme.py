@@ -250,7 +250,9 @@ CURSOR_COLOR = THEMES["amber"]["cursor"]
 
 # Initialize the palette module's phosphor palette with the default
 # (amber) theme so it's ready before any explicit apply_theme() call.
-_palette_mod._PALETTE_PHOSPHOR = _build_256_phosphor(_AMBER_PHOSPHOR)
+_palette_mod._PALETTE_PHOSPHOR = _build_256_phosphor(
+    _AMBER_PHOSPHOR, theme_fg=THEMES["amber"]["fg"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +292,7 @@ class ThemeContext:
             cursor=theme_palette["cursor"],
             phosphor_palette=_build_256_phosphor(
                 theme_palette["ansi_phosphor"],
+                theme_fg=theme_palette["fg"],
             ),
             # Own copy — not a reference to the global AMBER_COLORS dict
             ansi_colors=dict(theme_palette["ansi_phosphor"]),

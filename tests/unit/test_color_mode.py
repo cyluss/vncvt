@@ -20,6 +20,8 @@ import pytest
 
 from vncvt.cast_replay import inspect_frame, replay_cast
 from vncvt.palette import _STANDARD_PALETTE_256
+from vncvt import palette as _palette_mod
+from vncvt.theme import apply_theme
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisible.cast"
 
@@ -55,6 +57,50 @@ def test_standard_palette_256_shape():
     assert _STANDARD_PALETTE_256[9] == (255, 0, 0)
     assert _STANDARD_PALETTE_256[15] == (255, 255, 255)
 
+
+
+@pytest.mark.parametrize("theme, hue_check", [
+    ("amber", lambda r, g, b: r >= g >= b),
+    ("green", lambda r, g, b: g >= r and g >= b),
+    ("c64",   lambda r, g, b: b >= r and b >= g),
+    ("dos",   lambda r, g, b: b >= r and b >= g),
+    ("atari", lambda r, g, b: r >= g >= b),
+])
+def test_phosphor_ramp_preserves_hue(theme, hue_check):
+    """Mid-luminance phosphor palette entries (index 241 = Claude
+    Code's primary body text SGR) must carry visible chroma in the
+    theme's hue family, not collapse to neutral grey.
+
+    The OKLCH ramp in ``_build_256_phosphor`` holds the theme fg's
+    hue constant and scales chroma with lightness. This test asserts
+    both the minimum chroma floor (≥ 20) and the per-theme hue
+    invariant (amber = r≥g≥b, green = g dominant, etc.)."""
+    apply_theme(theme)
+    idx241 = _palette_mod._PALETTE_PHOSPHOR[241]
+    r, g, b = idx241
+    chroma = max(r, g, b) - min(r, g, b)
+    assert chroma >= 20, (
+        f"{theme} phosphor idx241={idx241} chroma={chroma} — "
+        f"too grey, expected ≥ 20"
+    )
+    assert hue_check(r, g, b), (
+        f"{theme} phosphor idx241={idx241} violates hue invariant"
+    )
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_neutral_phosphor_stays_grey(theme):
+    """Dark and light phosphor themes simulate achromatic CRTs (P4
+    white phosphor, paper-white). Their ramp must remain neutral
+    grey — no accidental chroma from the OKLCH interpolation."""
+    apply_theme(theme)
+    idx241 = _palette_mod._PALETTE_PHOSPHOR[241]
+    r, g, b = idx241
+    chroma = max(r, g, b) - min(r, g, b)
+    assert chroma < 5, (
+        f"{theme} phosphor idx241={idx241} chroma={chroma} — "
+        f"expected neutral grey (chroma < 5)"
+    )
 
 
 def test_phosphor_collapses_hues_on_amber():

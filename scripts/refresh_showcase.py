@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 """Regenerate the theme showcase screenshots in docs/screenshots/.
 
-Spawns vncvt for each built-in theme, runs Claude Code inside a
-temporary project directory, captures the welcome panel, writes
-it to ``docs/screenshots/claude-code-init-<theme>.png``.
+Reads ``docs/showcase.toml`` for the list of entries and per-entry
+overrides (crop height, wait times, Claude Code theme, etc.), spawns
+vncvt once per entry, drives Claude Code's welcome panel, captures
+the framebuffer.
 
 Usage:
-    uv run python scripts/refresh_showcase.py
-
-Claude Code's own theme is set via a per-theme --settings override
-so the rendered UI uses dark-ansi / light-ansi that matches the
-vncvt theme (otherwise e.g. amber vncvt shows claude in its default
-light theme and looks weird).
-
-The script is read by humans; it's not in the test suite because
-it depends on the local claude binary + network access to Claude
-Code's welcome-screen renderer.
+    uv run python scripts/refresh_showcase.py          # all entries
+    uv run python scripts/refresh_showcase.py amber    # just amber
+    uv run python scripts/refresh_showcase.py c64 dos  # just these two
 """
 
 from __future__ import annotations
@@ -24,54 +18,65 @@ import asyncio
 import json
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import asyncvnc
 from PIL import Image
 
-# Make sure we can import from the repo root when run as a script.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from tests.scenes import trigger_server_dump  # noqa: E402
 from vncvt.supervisor import start_vncvt, stop_vncvt  # noqa: E402
 
-
-# Top content-area height in pixels. Claude Code's welcome panel
-# fits in the first 7-8 rows; 180 px covers all of it at 13pt + 1.1
-# line height and crops out the empty bottom 2/3 of the framebuffer.
-_CROP_HEIGHT = 180
-
-
+SHOWCASE_TOML = _REPO_ROOT / "docs" / "showcase.toml"
 CLAUDE_BIN = Path.home() / ".local" / "bin" / "claude"
 OUTPUT_DIR = _REPO_ROOT / "docs" / "screenshots"
 
-# Map vncvt theme name → Claude Code's own theme key. The "-ansi"
-# suffix tells Claude Code to emit plain SGR ANSI codes (not truecolor
-# hex) so vncvt's per-theme ANSI palette drives the final colors.
-VNCVT_TO_CLAUDE_THEME = {
-    "amber":  "dark-ansi",
-    "dark":   "dark-ansi",
-    "green":  "dark-ansi",
-    "light":  "light-ansi",
-    "c64":    "dark-ansi",
-    "dos":    "dark-ansi",
-    "atari":  "dark-ansi",
+# Defaults used when showcase.toml omits a key.
+_BUILTIN_DEFAULTS = {
+    "claude-theme": "dark-ansi",
+    "crop-height": 300,
+    "font-size": 13,
+    "line-height": 1.1,
+    "wait-trust": 3.0,
+    "wait-welcome": 6.0,
 }
 
 
-async def capture_theme(vncvt_theme: str) -> Path:
-    """Spawn vncvt with Claude Code + the given theme; save screenshot."""
-    claude_theme = VNCVT_TO_CLAUDE_THEME[vncvt_theme]
+def _load_config() -> tuple[dict, list[dict]]:
+    """Return (defaults, entries) from showcase.toml."""
+    with SHOWCASE_TOML.open("rb") as f:
+        raw = tomllib.load(f)
+    defaults = {**_BUILTIN_DEFAULTS, **raw.get("defaults", {})}
+    entries = raw.get("entry", [])
+    if not entries:
+        sys.exit(f"ERROR: no [[entry]] sections in {SHOWCASE_TOML}")
+    return defaults, entries
+
+
+def _get(entry: dict, defaults: dict, key: str):
+    """Look up key in entry, fall back to defaults."""
+    return entry.get(key, defaults[key])
+
+
+async def capture_entry(entry: dict, defaults: dict) -> Path:
+    """Spawn vncvt + Claude Code for one showcase entry."""
+    theme = entry["theme"]
+    claude_theme = _get(entry, defaults, "claude-theme")
+    crop_height = int(_get(entry, defaults, "crop-height"))
+    font_size = int(_get(entry, defaults, "font-size"))
+    line_height = float(_get(entry, defaults, "line-height"))
+    wait_trust = float(_get(entry, defaults, "wait-trust"))
+    wait_welcome = float(_get(entry, defaults, "wait-welcome"))
 
     with TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         settings_path = tmpdir / "cc-settings.json"
         settings_path.write_text(json.dumps({"theme": claude_theme}))
 
-        # Wrapper script so the shell that vncvt spawns is really
-        # claude with the right --settings.
         wrapper = tmpdir / "cc-wrapper.sh"
         wrapper.write_text(
             f"#!/bin/bash\n"
@@ -81,42 +86,34 @@ async def capture_theme(vncvt_theme: str) -> Path:
 
         handle = start_vncvt(
             "--shell", str(wrapper),
-            "--theme", vncvt_theme,
-            "--font-size", "13",
-            "--line-height", "1.1",
+            "--theme", theme,
+            "--font-size", str(font_size),
+            "--line-height", str(line_height),
             scene_root=tmpdir / "scenes",
         )
         try:
             async with asyncvnc.connect(
                 host=handle.host, port=handle.port,
             ) as vnc:
-                # Wait for trust dialog to paint
-                await asyncio.sleep(3.0)
-                # Accept trust prompt (default is "Yes, I trust")
+                await asyncio.sleep(wait_trust)
                 vnc.keyboard.press("Return")
-                # Wait for welcome panel to paint
-                await asyncio.sleep(4.0)
-                # Pull a few screenshots to force asyncvnc's
-                # internal buffer to refresh to the latest frame.
+                await asyncio.sleep(wait_welcome)
                 for _ in range(3):
                     await vnc.screenshot()
                     await asyncio.sleep(0.3)
 
                 scene_dir = await trigger_server_dump(
-                    handle.control_socket, f"showcase-{vncvt_theme}",
+                    handle.control_socket, f"showcase-{theme}",
                 )
-                # Keep the full-height screenshot for archival / debug.
-                full_path = OUTPUT_DIR / f"claude-code-init-{vncvt_theme}.png"
+                full_path = OUTPUT_DIR / f"claude-code-init-{theme}.png"
                 shutil.copy(scene_dir / "scene.fb.png", full_path)
-                # Crop to the content area and write claude-code-<theme>.png
-                # — this is what the README references so block <img> tags
-                # render at native size without wasted whitespace.
-                cropped_path = OUTPUT_DIR / f"claude-code-{vncvt_theme}.png"
+
+                cropped_path = OUTPUT_DIR / f"claude-code-{theme}.png"
                 img = Image.open(full_path).convert("RGB")
-                cropped = img.crop((0, 0, img.width, _CROP_HEIGHT))
+                cropped = img.crop((0, 0, img.width, crop_height))
                 cropped.save(cropped_path)
                 print(
-                    f"  {vncvt_theme:11} -> "
+                    f"  {theme:11} -> "
                     f"{cropped_path.relative_to(_REPO_ROOT)}"
                 )
                 return cropped_path
@@ -128,11 +125,26 @@ async def main() -> int:
     if not CLAUDE_BIN.is_file():
         print(f"ERROR: claude binary not found at {CLAUDE_BIN}", file=sys.stderr)
         return 1
+    if not SHOWCASE_TOML.is_file():
+        print(f"ERROR: {SHOWCASE_TOML} not found", file=sys.stderr)
+        return 1
+
+    defaults, entries = _load_config()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Capturing theme showcase to {OUTPUT_DIR.relative_to(_REPO_ROOT)}/")
-    # Don't parallelize — each capture binds to port 5900 (or random).
-    for theme in VNCVT_TO_CLAUDE_THEME:
-        await capture_theme(theme)
+
+    # Filter to specific themes if given on the command line.
+    if len(sys.argv) > 1:
+        requested = set(sys.argv[1:])
+        entries = [e for e in entries if e["theme"] in requested]
+        missing = requested - {e["theme"] for e in entries}
+        if missing:
+            print(f"WARNING: no [[entry]] for: {sorted(missing)}", file=sys.stderr)
+        if not entries:
+            sys.exit("ERROR: no matching entries")
+
+    print(f"Capturing {len(entries)} theme(s) to {OUTPUT_DIR.relative_to(_REPO_ROOT)}/")
+    for entry in entries:
+        await capture_entry(entry, defaults)
     print("Done.")
     return 0
 

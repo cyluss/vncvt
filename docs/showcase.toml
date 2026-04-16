@@ -1,0 +1,62 @@
+# Showcase configuration — one [[entry]] per screenshot.
+#
+# refresh_showcase.py reads this file to know which themes to
+# capture, in what order, with what settings. Unset keys fall
+# back to the [defaults] section.
+#
+# After editing, regenerate screenshots with:
+#     uv run python scripts/refresh_showcase.py
+
+[defaults]
+claude-theme = "dark-ansi"
+crop-height = 300
+font-size = 13
+line-height = 1.1
+wait-trust = 3.0
+wait-welcome = 6.0
+
+[[entry]]
+theme = "amber"
+label = "warm amber on black *(default)*"
+description = """The primary aesthetic. Monotone by design: every ANSI \
+slot is a variant of warm amber. A software approximation of a 1983 \
+DEC VT220 amber phosphor CRT."""
+
+[[entry]]
+theme = "green"
+label = "phosphor green on black"
+description = """Same single-hue design as amber. Classic IBM 3270 / \
+DEC VT52 / Apple //e green-screen look."""
+
+[[entry]]
+theme = "dark"
+label = "white on black"
+description = """White phosphor CRT (P4 coating). Unlike amber/green, \
+the phosphor palette is neutral grey — no hue tint."""
+
+[[entry]]
+theme = "light"
+claude-theme = "light-ansi"
+label = "black on white"
+description = """Paper-white display (original Macintosh 1984). Dark \
+ink on white, near-monotone at low lightness."""
+
+[[entry]]
+theme = "c64"
+label = "Commodore 64 BASIC (Pepto NTSC)"
+description = """Based on the Pepto NTSC palette. Blue-on-blue \
+character of the original, with fg boosted to clear WCAG AA."""
+
+[[entry]]
+theme = "dos"
+label = "CGA dark blue (WordPerfect / Norton Commander)"
+description = """The classic DOS full-screen application bg. \
+WordPerfect 5.1, Norton Commander, Turbo C, QBasic all used CGA \
+color 1 (#0000AA) as their primary background."""
+
+[[entry]]
+theme = "atari"
+label = "Atari 8-bit GTIA register $2C"
+description = """Colors from the Lospec atari-8-bit-family-gtia \
+palette. GTIA hue 2, luminance 6 — the canonical warm orange used \
+on 800XL and 130XE systems."""
