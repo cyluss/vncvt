@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from vncvt.cast_replay import inspect_frame, replay_cast
-from vncvt.renderer import _STANDARD_PALETTE_256
+from vncvt.palette import _STANDARD_PALETTE_256
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisible.cast"
 

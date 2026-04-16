@@ -28,7 +28,8 @@ from typing import Iterator
 import pyte
 from PIL import Image
 
-from .renderer import TerminalRenderer, apply_theme
+from .renderer import TerminalRenderer
+from .theme import apply_theme
 
 
 # ---------- cast file parsing ----------

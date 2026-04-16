@@ -31,7 +31,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from vncvt.renderer import TerminalRenderer, apply_theme  # noqa: E402
+from vncvt.renderer import TerminalRenderer  # noqa: E402
+from vncvt.theme import apply_theme  # noqa: E402
 from vncvt.terminal import Terminal  # noqa: E402
 from PIL import Image  # noqa: E402
 

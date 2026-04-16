@@ -13,9 +13,8 @@ from pathlib import Path
 
 from .cast_recorder import CastRecorder
 from .terminal import Terminal
-from .renderer import (
-    TerminalRenderer, FONT_SEARCH_PATHS, _find_font, THEMES, apply_theme,
-)
+from .renderer import TerminalRenderer, FONT_SEARCH_PATHS, _find_font
+from .theme import THEMES, apply_theme
 from .server import RFBServer
 from .scene_dump import SceneDumper, serve_control_socket
 

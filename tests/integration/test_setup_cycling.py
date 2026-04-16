@@ -18,7 +18,8 @@ from __future__ import annotations
 import pytest
 
 from vncvt.terminal import Terminal
-from vncvt.renderer import TerminalRenderer, apply_theme
+from vncvt.renderer import TerminalRenderer
+from vncvt.theme import apply_theme
 from vncvt.server import RFBServer
 
 
