@@ -213,16 +213,18 @@ def _bold_from_fg(fg: tuple[int, int, int]) -> tuple[int, int, int]:
     )
 
 
-# GTIA phosphor palettes — one per hue, generated from NTSC lum-6 values.
-# Hue 2 (orange) dropped — too close to the amber theme.
-_GTIA_YELLOW_PHOSPHOR   = _make_gtia_phosphor((228, 196, 100))  # hue 4
-_GTIA_OLIVE_PHOSPHOR    = _make_gtia_phosphor((208, 212, 136))  # hue 5
-_GTIA_MINT_PHOSPHOR     = _make_gtia_phosphor((168, 228, 180))  # hue 7
-_GTIA_CYAN_PHOSPHOR     = _make_gtia_phosphor((152, 224, 208))  # hue 8
-_GTIA_PURPLE_PHOSPHOR   = _make_gtia_phosphor((204, 180, 240))  # hue 11
-_GTIA_ORCHID_PHOSPHOR   = _make_gtia_phosphor((220, 176, 228))  # hue 12
-_GTIA_ROSE_PHOSPHOR     = _make_gtia_phosphor((228, 172, 208))  # hue 13
-_GTIA_SALMON_PHOSPHOR   = _make_gtia_phosphor((228, 168, 184))  # hue 14
+# GTIA phosphor palettes — OKLCH-chroma-boosted to match amber's
+# vividness (C ≈ 0.144). Original NTSC lum-6 values are pastel by
+# hardware design; boosting makes them visually competitive with the
+# hand-tuned amber/green themes. Hue preserved, only chroma raised.
+_GTIA_YELLOW_PHOSPHOR   = _make_gtia_phosphor((234, 195,  71))  # hue 4
+_GTIA_OLIVE_PHOSPHOR    = _make_gtia_phosphor((210, 214,  92))  # hue 5
+_GTIA_MINT_PHOSPHOR     = _make_gtia_phosphor((135, 237, 160))  # hue 7
+_GTIA_CYAN_PHOSPHOR     = _make_gtia_phosphor(( 60, 238, 209))  # hue 8
+_GTIA_PURPLE_PHOSPHOR   = _make_gtia_phosphor((212, 169, 255))  # hue 11
+_GTIA_ORCHID_PHOSPHOR   = _make_gtia_phosphor((236, 162, 250))  # hue 12
+_GTIA_ROSE_PHOSPHOR     = _make_gtia_phosphor((253, 153, 221))  # hue 13
+_GTIA_SALMON_PHOSPHOR   = _make_gtia_phosphor((255, 145, 181))  # hue 14
 
 # Active palette -- apply_theme() replaces this dict in place so any
 # code holding a reference (including the 256-color builders below)
@@ -280,38 +282,38 @@ THEMES: dict[str, dict] = {
         "cursor":        (255, 255, 255),
         "ansi_phosphor": _DOS_PHOSPHOR,
     },
-    # --- Atari GTIA hues (NTSC palette, luminance 6 on black bg) ---
-    "yellow":  {  # GTIA hue 4 ($4C) — golden yellow
-        "bg": (0,0,0), "fg": (228,196,100), "bold": _bold_from_fg((228,196,100)),
-        "cursor": (228,196,100), "ansi_phosphor": _GTIA_YELLOW_PHOSPHOR,
+    # --- Atari GTIA hues (OKLCH-boosted to match amber's chroma) ---
+    "yellow":  {  # GTIA hue 4 ($4C)
+        "bg": (0,0,0), "fg": (234,195,71), "bold": _bold_from_fg((234,195,71)),
+        "cursor": (234,195,71), "ansi_phosphor": _GTIA_YELLOW_PHOSPHOR,
     },
-    "olive":   {  # GTIA hue 5 ($5C) — yellow-green / olive
-        "bg": (0,0,0), "fg": (208,212,136), "bold": _bold_from_fg((208,212,136)),
-        "cursor": (208,212,136), "ansi_phosphor": _GTIA_OLIVE_PHOSPHOR,
+    "olive":   {  # GTIA hue 5 ($5C)
+        "bg": (0,0,0), "fg": (210,214,92), "bold": _bold_from_fg((210,214,92)),
+        "cursor": (210,214,92), "ansi_phosphor": _GTIA_OLIVE_PHOSPHOR,
     },
-    "mint":    {  # GTIA hue 7 ($7C) — blue-green / seafoam
-        "bg": (0,0,0), "fg": (168,228,180), "bold": _bold_from_fg((168,228,180)),
-        "cursor": (168,228,180), "ansi_phosphor": _GTIA_MINT_PHOSPHOR,
+    "mint":    {  # GTIA hue 7 ($7C)
+        "bg": (0,0,0), "fg": (135,237,160), "bold": _bold_from_fg((135,237,160)),
+        "cursor": (135,237,160), "ansi_phosphor": _GTIA_MINT_PHOSPHOR,
     },
-    "cyan":    {  # GTIA hue 8 ($8C) — teal
-        "bg": (0,0,0), "fg": (152,224,208), "bold": _bold_from_fg((152,224,208)),
-        "cursor": (152,224,208), "ansi_phosphor": _GTIA_CYAN_PHOSPHOR,
+    "cyan":    {  # GTIA hue 8 ($8C)
+        "bg": (0,0,0), "fg": (60,238,209), "bold": _bold_from_fg((60,238,209)),
+        "cursor": (60,238,209), "ansi_phosphor": _GTIA_CYAN_PHOSPHOR,
     },
-    "purple":  {  # GTIA hue 11 ($BC) — lavender
-        "bg": (0,0,0), "fg": (204,180,240), "bold": _bold_from_fg((204,180,240)),
-        "cursor": (204,180,240), "ansi_phosphor": _GTIA_PURPLE_PHOSPHOR,
+    "purple":  {  # GTIA hue 11 ($BC)
+        "bg": (0,0,0), "fg": (212,169,255), "bold": _bold_from_fg((212,169,255)),
+        "cursor": (212,169,255), "ansi_phosphor": _GTIA_PURPLE_PHOSPHOR,
     },
-    "orchid":  {  # GTIA hue 12 ($CC) — orchid / pink-purple
-        "bg": (0,0,0), "fg": (220,176,228), "bold": _bold_from_fg((220,176,228)),
-        "cursor": (220,176,228), "ansi_phosphor": _GTIA_ORCHID_PHOSPHOR,
+    "orchid":  {  # GTIA hue 12 ($CC)
+        "bg": (0,0,0), "fg": (236,162,250), "bold": _bold_from_fg((236,162,250)),
+        "cursor": (236,162,250), "ansi_phosphor": _GTIA_ORCHID_PHOSPHOR,
     },
-    "rose":    {  # GTIA hue 13 ($DC) — rose / magenta
-        "bg": (0,0,0), "fg": (228,172,208), "bold": _bold_from_fg((228,172,208)),
-        "cursor": (228,172,208), "ansi_phosphor": _GTIA_ROSE_PHOSPHOR,
+    "rose":    {  # GTIA hue 13 ($DC)
+        "bg": (0,0,0), "fg": (253,153,221), "bold": _bold_from_fg((253,153,221)),
+        "cursor": (253,153,221), "ansi_phosphor": _GTIA_ROSE_PHOSPHOR,
     },
-    "salmon":  {  # GTIA hue 14 ($EC) — salmon pink
-        "bg": (0,0,0), "fg": (228,168,184), "bold": _bold_from_fg((228,168,184)),
-        "cursor": (228,168,184), "ansi_phosphor": _GTIA_SALMON_PHOSPHOR,
+    "salmon":  {  # GTIA hue 14 ($EC)
+        "bg": (0,0,0), "fg": (255,145,181), "bold": _bold_from_fg((255,145,181)),
+        "cursor": (255,145,181), "ansi_phosphor": _GTIA_SALMON_PHOSPHOR,
     },
 }
 
