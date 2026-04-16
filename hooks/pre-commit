@@ -18,7 +18,7 @@ TESTS = REPO / "tests" / "unit"
 
 
 def main() -> int:
-    print("Running unit tests…")
+    print("Running unit tests…", flush=True)
 
     if platform.system() == "Windows":
         # Convert Windows path to WSL /mnt/... path
