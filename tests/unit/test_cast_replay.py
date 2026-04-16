@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from vncvt.theme import THEMES
+
+_ALL_THEMES = sorted(THEMES)
+
 from vncvt.cast_replay import (
     ReplayedFrame,
     inspect_frame,
@@ -44,7 +48,7 @@ def test_replay_frames_yields_n():
 
 
 @pytest.mark.parametrize(
-    "theme", ["light", "dark", "amber", "green", "c64", "dos", "atari"]
+    "theme", _ALL_THEMES
 )
 def test_claude_row0_readable(theme):
     frame = replay_cast(FIXTURE, theme=theme)

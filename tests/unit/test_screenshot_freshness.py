@@ -25,13 +25,30 @@ SCREENSHOTS = Path(__file__).parent.parent.parent / "docs" / "screenshots"
 
 # Themes that have committed screenshots + their hue invariants.
 # The screenshot file is docs/screenshots/claude-code-<theme>.png.
-_CHROMATIC_THEMES = {
-    "amber": lambda r, g, b: r >= g >= b,
-    "green": lambda r, g, b: g >= r and g >= b,
-    "c64":   lambda r, g, b: b >= r and b >= g,
-    "dos":   lambda r, g, b: b >= r and b >= g,
-    "atari": lambda r, g, b: r >= g >= b,
-}
+from vncvt.theme import THEMES
+
+# Chromatic themes are those whose fg has chroma > 0 (not dark/light
+# which are neutral grey). Auto-detected so adding a theme doesn't
+# require updating this dict.
+def _build_chromatic_themes() -> dict:
+    from vncvt.oklch import srgb_to_oklch
+    out = {}
+    for name, t in THEMES.items():
+        fg = t["fg"]
+        _, C, _ = srgb_to_oklch(*fg)
+        if C < 0.02:
+            continue  # neutral (dark, light)
+        # Hue check: which channel dominates?
+        r, g, b = fg
+        if r >= g and r >= b:
+            out[name] = lambda r, g, b: r >= g or r >= b
+        elif g >= r and g >= b:
+            out[name] = lambda r, g, b: g >= r or g >= b
+        else:
+            out[name] = lambda r, g, b: b >= r or b >= g
+    return out
+
+_CHROMATIC_THEMES = _build_chromatic_themes()
 
 
 def _sample_non_bg(img: Image.Image, bg_threshold: int = 30) -> list[tuple[int, int, int]]:

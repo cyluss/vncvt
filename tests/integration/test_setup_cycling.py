@@ -142,12 +142,13 @@ async def test_cancel_does_not_persist():
     try:
         await server.enter_setup()
         setup = server._setup
-        # Navigate to Theme (field 4) and cycle twice
+        # Navigate to Theme field and cycle twice so it's no longer
+        # "amber". The exact value depends on the sorted theme list.
         for _ in range(4):
             setup.on_key(KEY_DOWN)
         setup.on_key(KEY_RETURN)
         setup.on_key(KEY_RETURN)
-        assert setup.snapshot()["Theme"] == "dark"
+        assert setup.snapshot()["Theme"] != "amber"
         # Exit WITHOUT applying
         await server.exit_setup(apply=False)
         assert server.theme == "amber", (

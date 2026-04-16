@@ -22,7 +22,9 @@ from vncvt.cast_replay import inspect_frame, replay_cast
 from vncvt.palette import _STANDARD_PALETTE_256
 from vncvt import palette as _palette_mod
 from vncvt.renderer import TerminalRenderer
-from vncvt.theme import apply_theme
+from vncvt.theme import apply_theme, THEMES
+
+_ALL_THEMES = sorted(THEMES)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisible.cast"
 
@@ -31,7 +33,7 @@ FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisib
     "mode", ["phosphor", "true-color"]
 )
 @pytest.mark.parametrize(
-    "theme", ["light", "dark", "amber", "green", "c64", "dos", "atari"]
+    "theme", _ALL_THEMES
 )
 def test_color_mode_contrast(mode, theme):
     """No matter which color_mode we pick, no non-space cell should
@@ -65,7 +67,14 @@ def test_standard_palette_256_shape():
     ("green", lambda r, g, b: g >= r and g >= b),
     ("c64",   lambda r, g, b: b >= r and b >= g),
     ("dos",   lambda r, g, b: b >= r and b >= g),
-    ("atari", lambda r, g, b: r >= g >= b),
+    ("yellow",  lambda r, g, b: r >= g and g >= b),
+    ("olive",   lambda r, g, b: g >= r and g >= b),
+    ("mint",    lambda r, g, b: g >= r and g >= b),
+    ("cyan",    lambda r, g, b: g >= r and b >= r),
+    ("purple",  lambda r, g, b: b >= r and b >= g),
+    ("orchid",  lambda r, g, b: b >= g or r >= g),
+    ("rose",    lambda r, g, b: r >= g),
+    ("salmon",  lambda r, g, b: r >= g and r >= b),
 ])
 def test_phosphor_ramp_preserves_hue(theme, hue_check):
     """Mid-luminance phosphor palette entries (index 241 = Claude
@@ -80,9 +89,15 @@ def test_phosphor_ramp_preserves_hue(theme, hue_check):
     idx241 = _palette_mod._PALETTE_PHOSPHOR[241]
     r, g, b = idx241
     chroma = max(r, g, b) - min(r, g, b)
-    assert chroma >= 20, (
+    # Floor scales with the theme's fg chroma — pastel GTIA hues
+    # (mint, orchid, etc.) have lower saturation than amber/green
+    # by hardware design, so a fixed floor would reject them.
+    fg = THEMES[theme]["fg"]
+    fg_chroma = max(fg) - min(fg)
+    floor = max(10, int(fg_chroma * 0.15))
+    assert chroma >= floor, (
         f"{theme} phosphor idx241={idx241} chroma={chroma} — "
-        f"too grey, expected ≥ 20"
+        f"too grey, expected ≥ {floor} (15% of fg chroma {fg_chroma})"
     )
     assert hue_check(r, g, b), (
         f"{theme} phosphor idx241={idx241} violates hue invariant"
@@ -109,7 +124,14 @@ def test_neutral_phosphor_stays_grey(theme):
     ("green", lambda r, g, b: g >= r and g >= b),
     ("c64",   lambda r, g, b: b >= r and b >= g),
     ("dos",   lambda r, g, b: b >= r and b >= g),
-    ("atari", lambda r, g, b: r >= g >= b),
+    ("yellow",  lambda r, g, b: r >= g and g >= b),
+    ("olive",   lambda r, g, b: g >= r and g >= b),
+    ("mint",    lambda r, g, b: g >= r and g >= b),
+    ("cyan",    lambda r, g, b: g >= r and b >= r),
+    ("purple",  lambda r, g, b: b >= r and b >= g),
+    ("orchid",  lambda r, g, b: b >= g or r >= g),
+    ("rose",    lambda r, g, b: r >= g),
+    ("salmon",  lambda r, g, b: r >= g and r >= b),
 ])
 def test_phosphor_truecolor_hex_tinted(theme, hue_check):
     """Truecolor hex inputs (not ANSI indices) in phosphor mode must
@@ -124,7 +146,8 @@ def test_phosphor_truecolor_hex_tinted(theme, hue_check):
 
 
 @pytest.mark.parametrize("theme", [
-    "amber", "green", "light", "dark", "c64", "dos", "atari",
+    "amber", "green", "light", "dark", "c64", "dos",
+    "yellow", "olive", "mint", "cyan", "purple", "orchid", "rose", "salmon",
 ])
 def test_phosphor_pole_orientation(theme):
     """In phosphor mode, fg must be pushed AWAY from the cell's bg

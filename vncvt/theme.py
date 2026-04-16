@@ -156,27 +156,73 @@ _DOS_PHOSPHOR = {
     "brightwhite":   (255,255, 255),
 }
 
-# Atari GTIA phosphor -- warm orange family (GTIA hue-2 ramp, Lospec).
-# Invariant: r >= g >= b (warm cast, mirrors amber).
-# Ramp from bg (0,0,0)=#000000 to fg (253,193,112)=#FDC170.
-_ATARI_PHOSPHOR = {
-    "black":         (0,   0,   0),   # near-bg
-    "red":           (51,  39,  22),
-    "green":         (76,  58,  34),
-    "brown":         (101, 77,  45),
-    "blue":          (25,  19,  11),
-    "magenta":       (127, 97,  56),
-    "cyan":          (152,116,  67),
-    "white":         (177,135,  78),
-    "brightblack":   (63,  48,  28),
-    "brightred":     (202,154,  90),
-    "brightgreen":   (215,164,  95),
-    "brightyellow":  (228,174, 101),
-    "brightblue":    (89,  68,  39),
-    "brightmagenta": (240,183, 106),
-    "brightcyan":    (247,188, 109),
-    "brightwhite":   (253,193, 112),
-}
+# ---------------------------------------------------------------------------
+# GTIA phosphor generator — builds a 16-slot single-hue phosphor dict
+# from a black background to the given fg color. Each SGR slot is a
+# different intensity along the ramp. Used by all Atari/GTIA-derived
+# themes so they don't each need a hand-tuned dict.
+# ---------------------------------------------------------------------------
+
+def _make_gtia_phosphor(
+    fg: tuple[int, int, int],
+) -> dict[str, tuple[int, int, int]]:
+    """Generate a 16-slot phosphor palette as a linear ramp from
+    black ``(0, 0, 0)`` to ``fg``.
+
+    The intensity assignments follow the same convention as the
+    hand-tuned _AMBER_PHOSPHOR: black and blue are near-bg (dark),
+    white is mid-bright, brightwhite = peak fg.
+    """
+    # t values: how far along the (0,0,0)→fg ramp each slot sits.
+    # Ordered to match SGR conventions (black=darkest, blue=very dark,
+    # white=mid-high, brightwhite=peak).
+    _SLOTS = [
+        ("black",         0.00),
+        ("red",           0.20),
+        ("green",         0.30),
+        ("brown",         0.40),
+        ("blue",          0.10),
+        ("magenta",       0.50),
+        ("cyan",          0.60),
+        ("white",         0.70),
+        ("brightblack",   0.25),
+        ("brightred",     0.80),
+        ("brightgreen",   0.85),
+        ("brightyellow",  0.90),
+        ("brightblue",    0.35),
+        ("brightmagenta", 0.95),
+        ("brightcyan",    0.97),
+        ("brightwhite",   1.00),
+    ]
+    return {
+        name: (
+            min(255, int(fg[0] * t)),
+            min(255, int(fg[1] * t)),
+            min(255, int(fg[2] * t)),
+        )
+        for name, t in _SLOTS
+    }
+
+
+def _bold_from_fg(fg: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Brighten fg by ~15% for the bold slot, clamped to 255."""
+    return (
+        min(255, int(fg[0] * 1.15)),
+        min(255, int(fg[1] * 1.15)),
+        min(255, int(fg[2] * 1.15)),
+    )
+
+
+# GTIA phosphor palettes — one per hue, generated from NTSC lum-6 values.
+# Hue 2 (orange) dropped — too close to the amber theme.
+_GTIA_YELLOW_PHOSPHOR   = _make_gtia_phosphor((228, 196, 100))  # hue 4
+_GTIA_OLIVE_PHOSPHOR    = _make_gtia_phosphor((208, 212, 136))  # hue 5
+_GTIA_MINT_PHOSPHOR     = _make_gtia_phosphor((168, 228, 180))  # hue 7
+_GTIA_CYAN_PHOSPHOR     = _make_gtia_phosphor((152, 224, 208))  # hue 8
+_GTIA_PURPLE_PHOSPHOR   = _make_gtia_phosphor((204, 180, 240))  # hue 11
+_GTIA_ORCHID_PHOSPHOR   = _make_gtia_phosphor((220, 176, 228))  # hue 12
+_GTIA_ROSE_PHOSPHOR     = _make_gtia_phosphor((228, 172, 208))  # hue 13
+_GTIA_SALMON_PHOSPHOR   = _make_gtia_phosphor((228, 168, 184))  # hue 14
 
 # Active palette -- apply_theme() replaces this dict in place so any
 # code holding a reference (including the 256-color builders below)
@@ -234,12 +280,38 @@ THEMES: dict[str, dict] = {
         "cursor":        (255, 255, 255),
         "ansi_phosphor": _DOS_PHOSPHOR,
     },
-    "atari": {  # Atari 8-bit GTIA hue-2 lum-6 ($2C)
-        "bg":            (0, 0, 0),
-        "fg":            (253, 193, 112),  # #FDC170  13.40:1 AAA
-        "bold":          (255, 220, 160),  # #FFDCA0
-        "cursor":        (253, 193, 112),
-        "ansi_phosphor": _ATARI_PHOSPHOR,
+    # --- Atari GTIA hues (NTSC palette, luminance 6 on black bg) ---
+    "yellow":  {  # GTIA hue 4 ($4C) — golden yellow
+        "bg": (0,0,0), "fg": (228,196,100), "bold": _bold_from_fg((228,196,100)),
+        "cursor": (228,196,100), "ansi_phosphor": _GTIA_YELLOW_PHOSPHOR,
+    },
+    "olive":   {  # GTIA hue 5 ($5C) — yellow-green / olive
+        "bg": (0,0,0), "fg": (208,212,136), "bold": _bold_from_fg((208,212,136)),
+        "cursor": (208,212,136), "ansi_phosphor": _GTIA_OLIVE_PHOSPHOR,
+    },
+    "mint":    {  # GTIA hue 7 ($7C) — blue-green / seafoam
+        "bg": (0,0,0), "fg": (168,228,180), "bold": _bold_from_fg((168,228,180)),
+        "cursor": (168,228,180), "ansi_phosphor": _GTIA_MINT_PHOSPHOR,
+    },
+    "cyan":    {  # GTIA hue 8 ($8C) — teal
+        "bg": (0,0,0), "fg": (152,224,208), "bold": _bold_from_fg((152,224,208)),
+        "cursor": (152,224,208), "ansi_phosphor": _GTIA_CYAN_PHOSPHOR,
+    },
+    "purple":  {  # GTIA hue 11 ($BC) — lavender
+        "bg": (0,0,0), "fg": (204,180,240), "bold": _bold_from_fg((204,180,240)),
+        "cursor": (204,180,240), "ansi_phosphor": _GTIA_PURPLE_PHOSPHOR,
+    },
+    "orchid":  {  # GTIA hue 12 ($CC) — orchid / pink-purple
+        "bg": (0,0,0), "fg": (220,176,228), "bold": _bold_from_fg((220,176,228)),
+        "cursor": (220,176,228), "ansi_phosphor": _GTIA_ORCHID_PHOSPHOR,
+    },
+    "rose":    {  # GTIA hue 13 ($DC) — rose / magenta
+        "bg": (0,0,0), "fg": (228,172,208), "bold": _bold_from_fg((228,172,208)),
+        "cursor": (228,172,208), "ansi_phosphor": _GTIA_ROSE_PHOSPHOR,
+    },
+    "salmon":  {  # GTIA hue 14 ($EC) — salmon pink
+        "bg": (0,0,0), "fg": (228,168,184), "bold": _bold_from_fg((228,168,184)),
+        "cursor": (228,168,184), "ansi_phosphor": _GTIA_SALMON_PHOSPHOR,
     },
 }
 

@@ -54,9 +54,44 @@ description = """The classic DOS full-screen application bg. \
 WordPerfect 5.1, Norton Commander, Turbo C, QBasic all used CGA \
 color 1 (#0000AA) as their primary background."""
 
+# --- Atari GTIA hues (NTSC luminance 6 on black bg) ---
+
 [[entry]]
-theme = "atari"
-label = "Atari 8-bit GTIA register $2C"
-description = """Colors from the Lospec atari-8-bit-family-gtia \
-palette. GTIA hue 2, luminance 6 — the canonical warm orange used \
-on 800XL and 130XE systems."""
+theme = "yellow"
+label = "GTIA hue 4 — golden yellow"
+description = "Atari GTIA $4C. Warm gold, distinct from amber."
+
+[[entry]]
+theme = "olive"
+label = "GTIA hue 5 — yellow-green / olive"
+description = "Atari GTIA $5C. Olive/lime tint."
+
+[[entry]]
+theme = "mint"
+label = "GTIA hue 7 — blue-green / seafoam"
+description = "Atari GTIA $7C. Cool mint, between green and cyan."
+
+[[entry]]
+theme = "cyan"
+label = "GTIA hue 8 — teal"
+description = "Atari GTIA $8C. Cool teal/cyan."
+
+[[entry]]
+theme = "purple"
+label = "GTIA hue 11 — lavender"
+description = "Atari GTIA $BC. Cool purple/lavender."
+
+[[entry]]
+theme = "orchid"
+label = "GTIA hue 12 — orchid / pink-purple"
+description = "Atari GTIA $CC. Warm orchid."
+
+[[entry]]
+theme = "rose"
+label = "GTIA hue 13 — rose / magenta"
+description = "Atari GTIA $DC. Warm rose pink."
+
+[[entry]]
+theme = "salmon"
+label = "GTIA hue 14 — salmon pink"
+description = "Atari GTIA $EC. Warm salmon, complementary to cyan."

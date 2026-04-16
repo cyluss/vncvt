@@ -17,6 +17,15 @@ from typing import Any
 import pyte
 
 
+def _theme_names() -> list[str]:
+    """Return theme names from the THEMES registry. Deferred import
+    to avoid circular dependency (theme.py imports from palette.py
+    which is a sibling, but setup_screen must not import theme.py
+    at module level because server.py imports both)."""
+    from .theme import THEMES
+    return list(THEMES)
+
+
 # Key sym constants mirrored from server.keysym_to_bytes for navigation.
 _KEY_UP = 0xFF52
 _KEY_DOWN = 0xFF54
@@ -105,7 +114,7 @@ class SetupScreen:
             _field("FPS", [15, 30, 60, 90, 120], initial.get("fps", 30)),
             _field(
                 "Theme",
-                ["amber", "green", "dark", "light", "c64", "dos", "atari"],
+                sorted(_theme_names()),
                 initial.get("theme", "amber"),
             ),
             _field(
