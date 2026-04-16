@@ -120,11 +120,12 @@ def replay_cast(
     chroma, theme-tinted), or ``"true-color"`` (native xterm + raw RGB
     passthrough)."""
     cast = load_cast(cast_path)
-    apply_theme(theme)
+    theme_ctx = apply_theme(theme)
     rend = TerminalRenderer(
         cols=cast.cols, rows=cast.rows,
         font_size=font_size, line_height=line_height, contrast=contrast,
         color_mode=color_mode,
+        theme=theme_ctx,
     )
     screen = pyte.Screen(cast.cols, cast.rows)
     stream = pyte.Stream(screen)

@@ -211,7 +211,7 @@ def main() -> None:
         parser.error("--line-height must be between 0.8 and 2.0")
 
     # Install theme palette before constructing the renderer
-    apply_theme(args.theme)
+    theme_ctx = apply_theme(args.theme)
 
     # Resolve --mode preset
     if args.mode is not None:
@@ -277,6 +277,7 @@ def main() -> None:
         line_height=args.line_height,
         contrast=args.contrast,
         color_mode=args.color_mode,
+        theme=theme_ctx,
     )
     server = RFBServer(
         host=args.host,

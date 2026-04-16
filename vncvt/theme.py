@@ -3,15 +3,17 @@
 Each theme carries a background/foreground/bold/cursor color quad plus
 a 16-slot phosphor palette (single-hue brightness ramp).  The active
 theme's colors are exposed as module-level globals (``DEFAULT_BG``,
-``DEFAULT_FG``, ``BOLD_FG``, ``CURSOR_COLOR``) that the renderer reads
-at draw time.
+``DEFAULT_FG``, ``BOLD_FG``, ``CURSOR_COLOR``) for backward
+compatibility, but new code should use :class:`ThemeContext` instead.
 
-``apply_theme()`` swaps these globals **and** rebuilds the 256-slot
-phosphor palette in :mod:`vncvt.palette` so ``_resolve_color`` always
-sees the current theme's mapping.
+``apply_theme()`` builds a :class:`ThemeContext`, updates the legacy
+module globals, and returns the context so callers can pass it to
+:class:`~vncvt.renderer.TerminalRenderer`.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from . import palette as _palette_mod
 from .palette import _build_256_phosphor, _PYTE_COLOR_NAMES
@@ -251,27 +253,67 @@ CURSOR_COLOR = THEMES["amber"]["cursor"]
 _palette_mod._PALETTE_PHOSPHOR = _build_256_phosphor(_AMBER_PHOSPHOR)
 
 
-def apply_theme(name: str) -> None:
+# ---------------------------------------------------------------------------
+# ThemeContext — immutable snapshot of a fully-resolved theme
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ThemeContext:
+    """Immutable snapshot of a fully-resolved theme.
+
+    Holds every value that the renderer needs so it never has to read
+    the mutable module-level globals.  Create via ``from_theme()`` or
+    ``apply_theme()``; pass to ``TerminalRenderer(theme=ctx)``.
+    """
+
+    name: str
+    bg: tuple[int, int, int]
+    fg: tuple[int, int, int]
+    bold: tuple[int, int, int]
+    cursor: tuple[int, int, int]
+    phosphor_palette: list[tuple[int, int, int]]  # 256-slot
+    ansi_colors: dict[str, tuple[int, int, int]]   # 16 named ANSI colors
+
+    @classmethod
+    def from_theme(cls, name: str) -> "ThemeContext":
+        """Build a ThemeContext from a named theme."""
+        if name not in THEMES:
+            raise ValueError(
+                f"unknown theme {name!r}; expected one of {sorted(THEMES)}"
+            )
+        theme_palette = THEMES[name]
+        return cls(
+            name=name,
+            bg=theme_palette["bg"],
+            fg=theme_palette["fg"],
+            bold=theme_palette["bold"],
+            cursor=theme_palette["cursor"],
+            phosphor_palette=_build_256_phosphor(
+                theme_palette["ansi_phosphor"],
+            ),
+            # Own copy — not a reference to the global AMBER_COLORS dict
+            ansi_colors=dict(theme_palette["ansi_phosphor"]),
+        )
+
+
+def apply_theme(name: str) -> ThemeContext:
     """Install one of the THEMES palettes as the module-level defaults.
 
-    Call before constructing any TerminalRenderer -- the render path
-    reads DEFAULT_BG / DEFAULT_FG / BOLD_FG / CURSOR_COLOR at draw
-    time, so swapping them here is enough for a theme change. The
-    256-slot phosphor palette is also rebuilt so _resolve_color can
-    look up integer ANSI indices in phosphor mode.
+    Builds a :class:`ThemeContext`, updates the legacy module globals
+    (``DEFAULT_BG``, ``DEFAULT_FG``, ``BOLD_FG``, ``CURSOR_COLOR``,
+    ``AMBER_COLORS``, and ``palette._PALETTE_PHOSPHOR``), and returns
+    the context.  New code should pass the returned context to
+    ``TerminalRenderer(theme=ctx)`` instead of relying on the globals.
     """
-    if name not in THEMES:
-        raise ValueError(
-            f"unknown theme {name!r}; expected one of {sorted(THEMES)}"
-        )
+    ctx = ThemeContext.from_theme(name)
+
     global DEFAULT_BG, DEFAULT_FG, BOLD_FG, CURSOR_COLOR
-    theme_palette = THEMES[name]
-    DEFAULT_BG = theme_palette["bg"]
-    DEFAULT_FG = theme_palette["fg"]
-    BOLD_FG = theme_palette["bold"]
-    CURSOR_COLOR = theme_palette["cursor"]
-    _palette_mod._PALETTE_PHOSPHOR = _build_256_phosphor(
-        theme_palette["ansi_phosphor"],
-    )
+    DEFAULT_BG = ctx.bg
+    DEFAULT_FG = ctx.fg
+    BOLD_FG = ctx.bold
+    CURSOR_COLOR = ctx.cursor
+    _palette_mod._PALETTE_PHOSPHOR = ctx.phosphor_palette
     AMBER_COLORS.clear()
-    AMBER_COLORS.update(theme_palette["ansi_phosphor"])
+    AMBER_COLORS.update(ctx.ansi_colors)
+
+    return ctx

@@ -203,17 +203,20 @@ class RFBServer:
         """Apply SET-UP mode changes: fps, theme, font size + line
         height, cols/rows."""
         from .renderer import apply_theme
+        from .theme import ThemeContext
 
         # fps first — cheapest, just an attribute write
         new_fps = snap.get("FPS")
         if isinstance(new_fps, int):
             self.fps = new_fps
 
-        # Theme — swap the module-level palette constants
+        # Theme — swap the module-level palette constants and get a
+        # ThemeContext to pass to the new renderer.
         new_theme = snap.get("Theme")
+        theme_ctx = None
         if isinstance(new_theme, str):
             try:
-                apply_theme(new_theme)
+                theme_ctx = apply_theme(new_theme)
                 self.theme = new_theme
             except ValueError:
                 pass
@@ -240,6 +243,10 @@ class RFBServer:
         )
         theme_changed = isinstance(new_theme, str)
         if font_changed or lh_changed or theme_changed or contrast_changed or color_mode_changed:
+            # If no theme change happened, carry forward the current
+            # renderer's ThemeContext so the new renderer stays isolated.
+            if theme_ctx is None:
+                theme_ctx = self.renderer.theme
             async with self._resize_lock:
                 old_renderer = self.renderer
                 self.renderer = TerminalRenderer(
@@ -250,6 +257,7 @@ class RFBServer:
                     line_height=new_lh if lh_changed else old_renderer.line_height,
                     contrast=new_contrast if contrast_changed else old_renderer.contrast,
                     color_mode=new_color_mode if color_mode_changed else old_renderer.color_mode,
+                    theme=theme_ctx,
                 )
                 all_rows = set(range(self.terminal.rows))
                 self.renderer.render_dirty(self._active_screen, all_rows)

@@ -16,6 +16,7 @@ from . import theme as _theme_mod
 from .theme import (
     AMBER_COLORS,
     THEMES,
+    ThemeContext,
     apply_theme,
 )
 from .palette import _STANDARD_PALETTE_256
@@ -114,6 +115,7 @@ class TerminalRenderer:
         line_height: float = 1.0,
         contrast: str = "normal",
         color_mode: str = "phosphor",
+        theme: ThemeContext | None = None,
     ):
         self.cols = cols
         self.rows = rows
@@ -121,6 +123,28 @@ class TerminalRenderer:
         self.contrast = contrast
         self.color_mode = color_mode
         self.line_height = line_height
+
+        # Resolve theme context.  If the caller passed an explicit
+        # ThemeContext use it; otherwise snapshot the current module
+        # globals into a ThemeContext for backward compatibility.
+        if theme is not None:
+            self.theme = theme
+        else:
+            # Build a ThemeContext from the current module-level globals
+            # so legacy callers that only called apply_theme() still work.
+            self.theme = ThemeContext(
+                name="<legacy>",
+                bg=_theme_mod.DEFAULT_BG,
+                fg=_theme_mod.DEFAULT_FG,
+                bold=_theme_mod.BOLD_FG,
+                cursor=_theme_mod.CURSOR_COLOR,
+                phosphor_palette=(
+                    list(_palette_mod._PALETTE_PHOSPHOR)
+                    if _palette_mod._PALETTE_PHOSPHOR is not None
+                    else []
+                ),
+                ansi_colors=dict(AMBER_COLORS),
+            )
 
         # Load fonts
         if font_path is None:
@@ -261,8 +285,8 @@ class TerminalRenderer:
         self.width = cols * self.cell_width + 2 * self.padding
         self.height = rows * self.cell_height + 2 * self.padding
 
-        # Create framebuffer image (padded by DEFAULT_BG on all sides).
-        self.image = Image.new("RGBX", (self.width, self.height), _theme_mod.DEFAULT_BG)
+        # Create framebuffer image (padded by theme bg on all sides).
+        self.image = Image.new("RGBX", (self.width, self.height), self.theme.bg)
         self._prev_cursor = (-1, -1)
 
     def _find_font_for_char(
@@ -359,7 +383,7 @@ class TerminalRenderer:
         self.rows = rows
         self.width = cols * self.cell_width + 2 * self.padding
         self.height = rows * self.cell_height + 2 * self.padding
-        self.image = Image.new("RGBX", (self.width, self.height), _theme_mod.DEFAULT_BG)
+        self.image = Image.new("RGBX", (self.width, self.height), self.theme.bg)
         self._prev_cursor = (-1, -1)
 
     def _resolve_color(
@@ -372,17 +396,18 @@ class TerminalRenderer:
         """Map a pyte color value to an amber-tinted RGB tuple."""
         if color == "default" or color is None:
             if is_bg:
-                return _theme_mod.DEFAULT_BG
-            return _theme_mod.BOLD_FG if bold else _theme_mod.DEFAULT_FG
+                return self.theme.bg
+            return self.theme.bold if bold else self.theme.fg
 
-        # Named color
-        if color in AMBER_COLORS:
+        # Named color — read from the instance's own ansi_colors copy
+        ansi = self.theme.ansi_colors
+        if color in ansi:
             if bold and not is_bg and not color.startswith("bright"):
                 # "brown" promotes to "brightyellow" per standard ANSI
                 bright_name = "brightyellow" if color == "brown" else ("bright" + color)
-                if bright_name in AMBER_COLORS:
-                    return AMBER_COLORS[bright_name]
-            return AMBER_COLORS[color]
+                if bright_name in ansi:
+                    return ansi[bright_name]
+            return ansi[color]
 
         # Integer index (ANSI 0-255)
         if isinstance(color, int) or (
@@ -394,7 +419,7 @@ class TerminalRenderer:
                     return _STANDARD_PALETTE_256[idx]
                 # phosphor (default): every SGR index collapses to a
                 # brightness variant of the theme's single hue.
-                return _palette_mod._PALETTE_PHOSPHOR[idx]
+                return self.theme.phosphor_palette[idx]
 
         # 6-char hex string (truecolor). fg is routed through the
         # theme's bg->fg OKLab ramp with a gamma-0.4 lift so dim greys
@@ -415,7 +440,7 @@ class TerminalRenderer:
             except ValueError:
                 pass
 
-        return _theme_mod.DEFAULT_FG
+        return self.theme.fg
 
     def _apply_oklab_ramp(
         self,
@@ -454,10 +479,10 @@ class TerminalRenderer:
             ref_bg_L = 1.0 if bg_L >= 0.5 else 0.0
             ref_fg_L = 0.0 if bg_L >= 0.5 else 1.0
         else:
-            ref_bg = _theme_mod.DEFAULT_BG
-            ref_fg = _theme_mod.DEFAULT_FG
-            ref_bg_L, _, _ = srgb_to_oklab(*_theme_mod.DEFAULT_BG)
-            ref_fg_L, _, _ = srgb_to_oklab(*_theme_mod.DEFAULT_FG)
+            ref_bg = self.theme.bg
+            ref_fg = self.theme.fg
+            ref_bg_L, _, _ = srgb_to_oklab(*self.theme.bg)
+            ref_fg_L, _, _ = srgb_to_oklab(*self.theme.fg)
         # The lift parameterizes the input on a bg->fg perceptual ramp.
         # On dark-on-light orientations (ref_bg brighter than ref_fg),
         # L=0 is the user's darkest intent and should map to ref_fg
@@ -512,7 +537,7 @@ class TerminalRenderer:
             # Clear the cell-grid area for this row (leave side padding alone).
             draw.rectangle(
                 [pad, y, pad + inner_w - 1, y + self.cell_height - 1],
-                fill=_theme_mod.DEFAULT_BG,
+                fill=self.theme.bg,
             )
 
             line = screen.buffer[row]
@@ -555,7 +580,7 @@ class TerminalRenderer:
                 if w == 0 and col > 0 and ch:
                     prev_x = (col - 1) * self.cell_width + pad
                     self._draw_glyph(
-                        ch, char.bold, prev_x, y, fg, _theme_mod.DEFAULT_BG,
+                        ch, char.bold, prev_x, y, fg, self.theme.bg,
                         self.cell_width,
                     )
                     continue
@@ -567,7 +592,7 @@ class TerminalRenderer:
                     self._draw_glyph(
                         ch, char.bold, x, y, fg, bg, cell_px,
                     )
-                elif bg != _theme_mod.DEFAULT_BG:
+                elif bg != self.theme.bg:
                     # Empty cell with a non-default background.
                     draw.rectangle(
                         [x, y, x + cell_px - 1, y + self.cell_height - 1],
@@ -624,14 +649,14 @@ class TerminalRenderer:
         draw = ImageDraw.Draw(cursor_img)
         draw.rectangle(
             [0, 0, cell_px - 1, self.cell_height - 1],
-            fill=_theme_mod.CURSOR_COLOR,
+            fill=self.theme.cursor,
         )
 
         # Redraw character under cursor with inverted color.
         if ch and ch != " ":
             draw.text(
                 (self._x_offset, self._y_offset),
-                ch, font=self.font, fill=_theme_mod.DEFAULT_BG,
+                ch, font=self.font, fill=self.theme.bg,
             )
 
         self._prev_cursor = (cx, cy)
