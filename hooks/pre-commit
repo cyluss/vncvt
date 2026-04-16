@@ -1,0 +1,41 @@
+#!/usr/bin/env python
+"""Pre-commit hook: run the unit test suite before every commit.
+
+To enable, run once from the repo root:
+    git config core.hooksPath hooks
+
+Requires uv on PATH (https://docs.astral.sh/uv/).
+On Windows, delegates to WSL 2 automatically.
+"""
+
+import platform
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+TESTS = REPO / "tests" / "unit"
+
+
+def main() -> int:
+    print("Running unit tests…")
+
+    if platform.system() == "Windows":
+        # Convert Windows path to WSL /mnt/... path
+        drive = REPO.drive.rstrip(":")  # "C:" → "C"
+        posix = f"/mnt/{drive.lower()}{REPO.as_posix()[2:]}"
+        result = subprocess.run(
+            ["wsl", "bash", "-lc",
+             f"cd '{posix}' && uv run pytest tests/unit/ -q --tb=short"],
+        )
+    else:
+        result = subprocess.run(
+            ["uv", "run", "pytest", str(TESTS), "-q", "--tb=short"],
+            cwd=str(REPO),
+        )
+
+    return result.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

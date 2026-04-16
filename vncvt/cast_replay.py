@@ -267,7 +267,17 @@ def inspect_pixels(
         y1 = int(round((row + 1) * cell_h)) + padding
         crop = img.crop((x0, y0, x1, y1))
         raw = crop.tobytes()
-        bg = (raw[0], raw[1], raw[2])
+        # Estimate bg as the most frequent quantized color in the
+        # cell.  The background always covers more area than the
+        # glyph, so the mode is the background — even when the glyph
+        # stroke touches the top-left corner (e.g. ⎿ in DejaVu).
+        from collections import Counter
+        _qcounts: Counter[tuple[int, int, int]] = Counter()
+        for i in range(0, len(raw), 3):
+            q = (raw[i] >> 4, raw[i + 1] >> 4, raw[i + 2] >> 4)
+            _qcounts[q] += 1
+        modal_q = _qcounts.most_common(1)[0][0]
+        bg = (modal_q[0] * 17, modal_q[1] * 17, modal_q[2] * 17)
         bg_lum = _luminance(bg)
         best = bg
         best_d = 0.0

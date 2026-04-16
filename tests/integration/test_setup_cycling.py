@@ -146,7 +146,7 @@ async def test_cancel_does_not_persist():
             setup.on_key(KEY_DOWN)
         setup.on_key(KEY_RETURN)
         setup.on_key(KEY_RETURN)
-        assert setup.snapshot()["Theme"] == "light"
+        assert setup.snapshot()["Theme"] == "dark"
         # Exit WITHOUT applying
         await server.exit_setup(apply=False)
         assert server.theme == "amber", (

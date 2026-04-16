@@ -25,6 +25,13 @@ For earlier sessions' handoffs see other files matching
 All active development happens on `claude/vnc-terminal-server-YAmN5`.
 Never push to a different branch without explicit user permission.
 
+## Platform requirements
+
+vncvt requires **Linux or macOS**. On Windows, use **WSL 2** — the
+native Windows environment cannot run vncvt (skia-python, PTY, and
+the venv itself do not work on win32). Run all `uv run` commands
+inside a WSL 2 shell, not in a Windows terminal.
+
 ## Test commands
 
 ```
