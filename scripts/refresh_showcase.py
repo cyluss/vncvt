@@ -121,20 +121,86 @@ async def capture_entry(entry: dict, defaults: dict) -> Path:
             stop_vncvt(handle)
 
 
+def generate_showcase_md(entries: list[dict]) -> str:
+    """Generate SHOWCASE.md content from the TOML entries."""
+    lines = [
+        "# Theme showcase",
+        "",
+        f"{len(entries)} built-in themes. Screenshots capture Claude Code's "
+        "welcome panel at 80×24, SF Mono 13pt, `line-height 1.1`, "
+        "`contrast max`, `color-mode phosphor`.",
+        "",
+    ]
+    current_category = None
+    for entry in entries:
+        cat = entry.get("category", "Other")
+        if cat != current_category:
+            current_category = cat
+            lines.append(f"## {cat}")
+            lines.append("")
+        theme = entry["theme"]
+        label = entry.get("label", theme)
+        desc = entry.get("description", "")
+        lines.append(f"### `{theme}` — {label}")
+        lines.append("")
+        lines.append(f"![{theme}](screenshots/claude-code-{theme}.png)")
+        lines.append("")
+        if desc:
+            lines.append(desc.strip())
+            lines.append("")
+
+    lines.extend([
+        "## Color modes",
+        "",
+        "| Mode | What it renders |",
+        "|---|---|",
+        "| `phosphor` *(default)* | Single-hue, 16 intensity shades. "
+        "SGR index → brightness cue, not hue cue. |",
+        "| `true-color` | Raw passthrough. Standard xterm 256 palette + "
+        "raw 24-bit RGB. The only mode showing native TUI colors. |",
+        "",
+        "See [`docs/design-color.md`](design-color.md) for the full "
+        "tier definitions and OKLCH rationale.",
+        "",
+        "## Regenerating",
+        "",
+        "```bash",
+        "uv run python scripts/refresh_showcase.py              # screenshots",
+        "uv run python scripts/refresh_showcase.py --generate-md  # this file",
+        "uv run python scripts/refresh_showcase.py amber mint    # just these",
+        "```",
+        "",
+        "Configuration in [`docs/showcase.toml`](showcase.toml).",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 async def main() -> int:
-    if not CLAUDE_BIN.is_file():
-        print(f"ERROR: claude binary not found at {CLAUDE_BIN}", file=sys.stderr)
-        return 1
     if not SHOWCASE_TOML.is_file():
         print(f"ERROR: {SHOWCASE_TOML} not found", file=sys.stderr)
         return 1
 
     defaults, entries = _load_config()
+
+    # --generate-md: write SHOWCASE.md from the TOML and exit.
+    if "--generate-md" in sys.argv:
+        md = generate_showcase_md(entries)
+        out = _REPO_ROOT / "docs" / "SHOWCASE.md"
+        out.write_text(md)
+        print(f"wrote {out.relative_to(_REPO_ROOT)}")
+        return 0
+
+    if not CLAUDE_BIN.is_file():
+        print(f"ERROR: claude binary not found at {CLAUDE_BIN}", file=sys.stderr)
+        return 1
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Filter to specific themes if given on the command line.
-    if len(sys.argv) > 1:
-        requested = set(sys.argv[1:])
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if args:
+        requested = set(args)
         entries = [e for e in entries if e["theme"] in requested]
         missing = requested - {e["theme"] for e in entries}
         if missing:

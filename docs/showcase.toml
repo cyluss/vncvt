@@ -4,8 +4,8 @@
 # capture, in what order, with what settings. Unset keys fall
 # back to the [defaults] section.
 #
-# After editing, regenerate screenshots with:
-#     uv run python scripts/refresh_showcase.py
+# Regenerate screenshots:  uv run python scripts/refresh_showcase.py
+# Regenerate SHOWCASE.md:  uv run python scripts/refresh_showcase.py --generate-md
 
 [defaults]
 claude-theme = "dark-ansi"
@@ -15,8 +15,11 @@ line-height = 1.1
 wait-trust = 3.0
 wait-welcome = 6.0
 
+# --- Phosphor CRT types ---
+
 [[entry]]
 theme = "amber"
+category = "Phosphor CRT types"
 label = "warm amber on black *(default)*"
 description = """The primary aesthetic. Monotone by design: every ANSI \
 slot is a variant of warm amber. A software approximation of a 1983 \
@@ -24,74 +27,85 @@ DEC VT220 amber phosphor CRT."""
 
 [[entry]]
 theme = "green"
+category = "Phosphor CRT types"
 label = "phosphor green on black"
 description = """Same single-hue design as amber. Classic IBM 3270 / \
 DEC VT52 / Apple //e green-screen look."""
 
 [[entry]]
 theme = "dark"
+category = "Phosphor CRT types"
 label = "white on black"
-description = """White phosphor CRT (P4 coating). Unlike amber/green, \
-the phosphor palette is neutral grey — no hue tint."""
+description = """White phosphor CRT (P4 coating). Neutral grey ramp — no hue tint."""
 
 [[entry]]
 theme = "light"
+category = "Phosphor CRT types"
 claude-theme = "light-ansi"
 label = "black on white"
-description = """Paper-white display (original Macintosh 1984). Dark \
-ink on white, near-monotone at low lightness."""
+description = """Paper-white display (original Macintosh 1984). Inverted polarity."""
+
+# --- 8-bit / PC color schemes ---
 
 [[entry]]
 theme = "c64"
+category = "8-bit / PC color schemes"
 label = "Commodore 64 BASIC (Pepto NTSC)"
-description = """Based on the Pepto NTSC palette. Blue-on-blue \
-character of the original, with fg boosted to clear WCAG AA."""
+description = """Blue-on-blue character of the original, with fg boosted to clear WCAG AA."""
 
 [[entry]]
 theme = "dos"
+category = "8-bit / PC color schemes"
 label = "CGA dark blue (WordPerfect / Norton Commander)"
-description = """The classic DOS full-screen application bg. \
-WordPerfect 5.1, Norton Commander, Turbo C, QBasic all used CGA \
-color 1 (#0000AA) as their primary background."""
+description = """The classic DOS full-screen application bg. WordPerfect 5.1, \
+Norton Commander, Turbo C, QBasic all used CGA color 1 (#0000AA)."""
 
-# --- Atari GTIA hues (NTSC luminance 6 on black bg) ---
+# --- Atari GTIA hues ---
 
 [[entry]]
 theme = "yellow"
+category = "Atari GTIA hues"
 label = "GTIA hue 4 — golden yellow"
 description = "Atari GTIA $4C. Warm gold, distinct from amber."
 
 [[entry]]
 theme = "olive"
+category = "Atari GTIA hues"
 label = "GTIA hue 5 — yellow-green / olive"
 description = "Atari GTIA $5C. Olive/lime tint."
 
 [[entry]]
 theme = "mint"
+category = "Atari GTIA hues"
 label = "GTIA hue 7 — blue-green / seafoam"
 description = "Atari GTIA $7C. Cool mint, between green and cyan."
 
 [[entry]]
 theme = "cyan"
+category = "Atari GTIA hues"
 label = "GTIA hue 8 — teal"
 description = "Atari GTIA $8C. Cool teal/cyan."
 
 [[entry]]
 theme = "purple"
+category = "Atari GTIA hues"
 label = "GTIA hue 11 — lavender"
 description = "Atari GTIA $BC. Cool purple/lavender."
 
 [[entry]]
 theme = "orchid"
+category = "Atari GTIA hues"
 label = "GTIA hue 12 — orchid / pink-purple"
 description = "Atari GTIA $CC. Warm orchid."
 
 [[entry]]
 theme = "rose"
+category = "Atari GTIA hues"
 label = "GTIA hue 13 — rose / magenta"
 description = "Atari GTIA $DC. Warm rose pink."
 
 [[entry]]
 theme = "salmon"
+category = "Atari GTIA hues"
 label = "GTIA hue 14 — salmon pink"
 description = "Atari GTIA $EC. Warm salmon, complementary to cyan."
