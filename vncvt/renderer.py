@@ -146,6 +146,19 @@ class TerminalRenderer:
                 ansi_colors=dict(AMBER_COLORS),
             )
 
+        # Cache the theme's phosphor hue/chroma for OKLCH ramp in
+        # _apply_oklab_ramp.  Extracted from theme.fg if chromatic,
+        # else from the most chromatic entry in the phosphor palette.
+        from .oklch import srgb_to_oklch
+        _, pc, ph = srgb_to_oklch(*self.theme.fg)
+        if pc < 0.02:
+            for entry in self.theme.ansi_colors.values():
+                _, c, h = srgb_to_oklch(*entry)
+                if c > pc:
+                    pc, ph = c, h
+        self._phosphor_chroma = pc
+        self._phosphor_hue = ph
+
         # Load fonts
         if font_path is None:
             font_path = _find_font(FONT_SEARCH_PATHS)
@@ -468,14 +481,35 @@ class TerminalRenderer:
         # DEFAULT_FG when cell_bg is unknown preserves legacy behavior.
         if cell_bg is not None:
             bg_L, _, _ = srgb_to_oklab(*cell_bg)
-            if bg_L >= 0.5:
-                # Light cell bg: push fg toward black so the darkest
-                # input intent (L=0) lands on black.
-                ref_bg = (255, 255, 255)
-                ref_fg = (0, 0, 0)
+            if self.color_mode == "phosphor":
+                # Phosphor mode: use the theme's own bg/fg as the
+                # ramp endpoints (they carry the hue) but orient
+                # based on cell_bg so fg gets pushed AWAY from the
+                # cell's actual background for readable contrast.
+                # Identify which theme pole is bright vs dark — can't
+                # assume fg is bright (light theme has black fg on
+                # white bg).
+                tbg_L, _, _ = srgb_to_oklab(*self.theme.bg)
+                tfg_L, _, _ = srgb_to_oklab(*self.theme.fg)
+                if tfg_L >= tbg_L:
+                    bright_pole, dark_pole = self.theme.fg, self.theme.bg
+                else:
+                    bright_pole, dark_pole = self.theme.bg, self.theme.fg
+                if bg_L >= 0.5:
+                    ref_bg = bright_pole  # cell bg is light → anchor bg at bright
+                    ref_fg = dark_pole    # push fg toward dark pole (away from cell bg)
+                else:
+                    ref_bg = dark_pole    # cell bg is dark → anchor bg at dark
+                    ref_fg = bright_pole  # push fg toward bright pole
             else:
-                ref_bg = (0, 0, 0)
-                ref_fg = (255, 255, 255)
+                # True-color / other: use generic black/white so the
+                # ramp is hue-neutral (TUI's native hue preserved).
+                if bg_L >= 0.5:
+                    ref_bg = (255, 255, 255)
+                    ref_fg = (0, 0, 0)
+                else:
+                    ref_bg = (0, 0, 0)
+                    ref_fg = (255, 255, 255)
             ref_bg_L = 1.0 if bg_L >= 0.5 else 0.0
             ref_fg_L = 0.0 if bg_L >= 0.5 else 1.0
         else:
@@ -500,6 +534,16 @@ class TerminalRenderer:
         # was tuned against Claude Code's actual grey inputs (#808080,
         # #949494, #d78787) to clear 4.5:1 on every built-in theme bg.
         t = max(0.0, min(1.0, L_eff)) ** 0.4
+        if self.color_mode == "phosphor" and self._phosphor_chroma > 0.01:
+            # OKLCH ramp: hold the theme's hue constant, vary L and C.
+            # This preserves the tint at every luminance level instead
+            # of washing out toward neutral grey via linear-RGB mixing.
+            from .oklch import oklch_to_srgb, srgb_to_oklab
+            bg_pole_L, _, _ = srgb_to_oklab(*ref_bg)
+            fg_pole_L, _, _ = srgb_to_oklab(*ref_fg)
+            out_L = bg_pole_L + (fg_pole_L - bg_pole_L) * t
+            out_C = self._phosphor_chroma * t
+            return oklch_to_srgb(out_L, out_C, self._phosphor_hue)
         bg_r, bg_g, bg_b = ref_bg
         fg_r, fg_g, fg_b = ref_fg
         return (

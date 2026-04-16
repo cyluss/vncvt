@@ -21,6 +21,7 @@ import pytest
 from vncvt.cast_replay import inspect_frame, replay_cast
 from vncvt.palette import _STANDARD_PALETTE_256
 from vncvt import palette as _palette_mod
+from vncvt.renderer import TerminalRenderer
 from vncvt.theme import apply_theme
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "claude-light-row0-invisible.cast"
@@ -100,6 +101,45 @@ def test_neutral_phosphor_stays_grey(theme):
     assert chroma < 5, (
         f"{theme} phosphor idx241={idx241} chroma={chroma} — "
         f"expected neutral grey (chroma < 5)"
+    )
+
+
+@pytest.mark.parametrize("theme, hue_check", [
+    ("amber", lambda r, g, b: r >= g >= b),
+    ("green", lambda r, g, b: g >= r and g >= b),
+    ("c64",   lambda r, g, b: b >= r and b >= g),
+    ("dos",   lambda r, g, b: b >= r and b >= g),
+    ("atari", lambda r, g, b: r >= g >= b),
+])
+def test_phosphor_truecolor_hex_tinted(theme, hue_check):
+    """Truecolor hex inputs (not ANSI indices) in phosphor mode must
+    also carry the theme's hue, not collapse to neutral grey. This
+    tests the _apply_oklab_ramp path, not the palette lookup path."""
+    ctx = apply_theme(theme)
+    r = TerminalRenderer(cols=80, rows=24, theme=ctx, color_mode="phosphor")
+    result = r._resolve_color("00c800", bold=False, is_bg=False, cell_bg=(0, 0, 0))
+    chroma = max(result) - min(result)
+    assert chroma >= 20, f"{theme} truecolor hex {result} chroma={chroma}"
+    assert hue_check(*result), f"{theme} truecolor hex {result} wrong hue"
+
+
+@pytest.mark.parametrize("theme", [
+    "amber", "green", "light", "dark", "c64", "dos", "atari",
+])
+def test_phosphor_pole_orientation(theme):
+    """In phosphor mode, fg must be pushed AWAY from the cell's bg
+    regardless of whether the theme's polarity is bright-on-dark
+    (amber) or dark-on-bright (light). Verify both cell_bg
+    orientations produce readable contrast."""
+    ctx = apply_theme(theme)
+    r = TerminalRenderer(cols=80, rows=24, theme=ctx, color_mode="phosphor")
+    dark_cell = r._resolve_color("808080", bold=False, is_bg=False, cell_bg=(0, 0, 0))
+    light_cell = r._resolve_color("808080", bold=False, is_bg=False, cell_bg=(240, 240, 240))
+    dark_lum = 0.2126 * dark_cell[0] / 255 + 0.7152 * dark_cell[1] / 255 + 0.0722 * dark_cell[2] / 255
+    light_lum = 0.2126 * light_cell[0] / 255 + 0.7152 * light_cell[1] / 255 + 0.0722 * light_cell[2] / 255
+    assert dark_lum > light_lum, (
+        f"{theme}: dark_cell={dark_cell} (lum={dark_lum:.2f}) should be "
+        f"brighter than light_cell={light_cell} (lum={light_lum:.2f})"
     )
 
 
