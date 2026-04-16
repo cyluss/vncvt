@@ -28,6 +28,14 @@ import pytest
 import pytest_asyncio
 
 
+@pytest.fixture(autouse=True)
+def _reset_theme():
+    """Reset renderer theme to amber after each test to prevent state leaks."""
+    yield
+    from vncvt.renderer import apply_theme
+    apply_theme("amber")
+
+
 def _claude_binary() -> str | None:
     """Return the absolute path to the `claude` CLI binary, or None.
 

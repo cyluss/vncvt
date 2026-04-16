@@ -49,3 +49,4 @@ uv run --with scikit-image --with pillow \
 - `.github/workflows/loopback-test.yml` — CI with 3 jobs:
   `linux-pytest`, `linux-vncdo-cross-check`, `macos-screen-sharing`
 - `docs/` — session handoff documents
+- `docs/architecture.md` — module dependency graph, shared state, color pipeline
