@@ -195,7 +195,7 @@ async def vnc(vncvt_server, request):
     so the failure hook can dump a final ``test_failed`` scene.
     """
     host, port = vncvt_server
-    async with asyncvnc.connect(host, port) as client:
+    async with asyncvnc.connect(host, port, password="vncvt") as client:
         await _wait_for_prompt(client)
         request.node._vncvt_client = client
         yield client

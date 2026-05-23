@@ -67,7 +67,7 @@ async def _run(project_dir: Path, theme: str, threshold: float,
         )
         try:
             async with asyncvnc.connect(
-                host=handle.host, port=handle.port,
+                host=handle.host, port=handle.port, password="vncvt",
             ) as vnc:
                 # Claude's --resume picker needs a second to paint,
                 # then Return selects the most recent session.

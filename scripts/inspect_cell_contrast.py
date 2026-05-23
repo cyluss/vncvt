@@ -94,7 +94,7 @@ async def _live_capture(threshold: float, theme: str) -> int:
         )
         try:
             async with asyncvnc.connect(
-                host=handle.host, port=handle.port,
+                host=handle.host, port=handle.port, password="vncvt",
             ) as vnc:
                 await asyncio.sleep(3.0)
                 vnc.keyboard.press("Return")  # accept trust prompt

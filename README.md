@@ -24,8 +24,8 @@ Requirements:
 Run it:
 
 ```bash
-uv run vncvt                      # listen on 127.0.0.1:5900, amber theme
-open "vnc://:PASSWORD@127.0.0.1"  # macOS Screen Sharing.app
+uv run vncvt                      # listen on :5900, password "vncvt"
+open "vnc://:vncvt@127.0.0.1"    # macOS Screen Sharing.app
 ```
 
 ## Themes
@@ -55,7 +55,7 @@ Server:
 
 - `--host HOST` — listen address (default: `127.0.0.1`)
 - `--port PORT` — RFB port (default: `5900`)
-- `--password PW` — enable VNC Auth (required for macOS Screen Sharing.app)
+- `--password PW` — VNC Auth password (default: `vncvt`)
 - `--shell SHELL` — shell to run (default: `$SHELL`)
 - `--fps N` — framebuffer rate cap, 1–120 (default: `15`)
 

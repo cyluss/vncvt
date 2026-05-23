@@ -1,7 +1,7 @@
 """Raw-protocol test: VNC Authentication (RFB security type 2).
 
-Verifies the DES challenge/response path that vncvt offers when it's
-started with ``--password``. Happy path must succeed with the right
+Password is mandatory (default: "vncvt"). Verifies the DES
+challenge/response path. Happy path must succeed with the right
 password; wrong password must be rejected with SecurityResult=1 and
 an RFB 3.8 reason string.
 
@@ -85,18 +85,24 @@ def test_vnc_auth_rejects_wrong_password(vncvt_server_factory):
         s.close()
 
 
-def test_no_password_offers_only_none_auth(vncvt_server):
-    """When vncvt is started without --password, it must advertise
-    exactly one security type (None = 1) for backwards compat with
-    clients that don't support VNC auth."""
+def test_default_password_accepts_vncvt(vncvt_server):
+    """Server started without explicit --password uses the default
+    password 'vncvt' and must accept VNC auth with it."""
     host, port = vncvt_server
     s = socket.create_connection((host, port), timeout=5.0)
     try:
         _handshake_version(s)
         n_sec = s.recv(1)[0]
-        assert n_sec == 1, f"expected 1 security type, got {n_sec}"
         sec_types = list(s.recv(n_sec))
-        assert sec_types == [1], f"expected [None=1], got {sec_types}"
+        assert sec_types == [2], f"expected [VNC=2], got {sec_types}"
+        s.send(bytes([2]))
+
+        challenge = s.recv(16)
+        assert len(challenge) == 16
+        s.send(_vnc_encrypt(challenge, "vncvt"))
+
+        result = struct.unpack(">I", s.recv(4))[0]
+        assert result == 0, f"expected SecurityResult=0, got {result}"
     finally:
         s.close()
 
@@ -130,21 +136,24 @@ def test_rfb_33_vnc_auth_uses_uint32_security_type(vncvt_server_factory):
         s.close()
 
 
-def test_rfb_33_none_auth_skips_security_result(vncvt_server):
-    """RFB 3.3/3.7 do NOT send a SecurityResult when the negotiated
-    security type is None — the server must proceed straight to
-    ClientInit/ServerInit. Sending a stray u32 here would desync any
-    3.3 client.
-    """
+def test_rfb_33_default_password_vnc_auth(vncvt_server):
+    """RFB 3.3 with the default password must negotiate VNC auth
+    (type 2) via the u32 security-type path."""
     host, port = vncvt_server
     s = socket.create_connection((host, port), timeout=5.0)
     try:
         _handshake_version(s, minor=3)
 
         sec_type = struct.unpack(">I", s.recv(4))[0]
-        assert sec_type == 1, f"expected u32 None (1), got {sec_type}"
+        assert sec_type == 2, f"expected u32 VNC auth (2), got {sec_type}"
 
-        # No SecurityResult — go straight to ClientInit + ServerInit.
+        challenge = s.recv(16)
+        assert len(challenge) == 16
+        s.send(_vnc_encrypt(challenge, "vncvt"))
+
+        result = struct.unpack(">I", s.recv(4))[0]
+        assert result == 0, f"expected SecurityResult=0, got {result}"
+
         s.send(bytes([1]))  # shared flag
         server_init = s.recv(24)
         w, h = struct.unpack(">HH", server_init[0:4])

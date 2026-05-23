@@ -90,7 +90,7 @@ async def test_claude_startup_renders(vncvt_server_factory, scene):
         # sees real content (dark bg still keeps the threshold valid).
         "--theme", "dark",
     )
-    async with asyncvnc.connect(host=host, port=port) as vnc:
+    async with asyncvnc.connect(host=host, port=port, password="vncvt") as vnc:
         img = await _wait_for_claude_welcome(vnc)
         await scene("claude_welcome")
         # Assert subprocess is still alive — claude didn't crash
@@ -175,7 +175,7 @@ async def test_claude_borders_no_stray_underlines(
     )
     control_socket = _control_socket_from_proc(proc)
 
-    async with asyncvnc.connect(host=host, port=port) as vnc:
+    async with asyncvnc.connect(host=host, port=port, password="vncvt") as vnc:
         await _wait_for_claude_welcome(vnc)
         scene_dir = await trigger_server_dump(control_socket, "claude_borders")
 
@@ -344,7 +344,7 @@ async def test_claude_f3_enters_setup_mode(vncvt_server_factory):
         "--shell", claude,
         "--theme", "dark",
     )
-    async with asyncvnc.connect(host=host, port=port) as vnc:
+    async with asyncvnc.connect(host=host, port=port, password="vncvt") as vnc:
         await _wait_for_claude_welcome(vnc)
 
         # Baseline: Claude Code welcome panel, no overlay.
@@ -412,7 +412,7 @@ async def test_claude_theme_switch_via_setup(vncvt_server_factory):
         "--shell", claude,
         "--theme", "amber",
     )
-    async with asyncvnc.connect(host=host, port=port) as vnc:
+    async with asyncvnc.connect(host=host, port=port, password="vncvt") as vnc:
         await _wait_for_claude_welcome(vnc)
 
         # Baseline: amber theme -> dominant fg should be orange-ish.
@@ -491,7 +491,7 @@ async def test_claude_resize_reflows_ui(tmp_path: Path) -> None:
     )
     try:
         async with asyncvnc.connect(
-            host=handle.host, port=handle.port,
+            host=handle.host, port=handle.port, password="vncvt",
         ) as vnc:
             # Wait for Claude Code's welcome panel to render at the
             # default geometry before we disturb it. If we resize
@@ -592,7 +592,7 @@ async def test_claude_132_col_preset_spawns(tmp_path: Path) -> None:
     )
     try:
         async with asyncvnc.connect(
-            host=handle.host, port=handle.port,
+            host=handle.host, port=handle.port, password="vncvt",
         ) as vnc:
             img = await _wait_for_claude_welcome(
                 vnc, timeout=_WIDE_WELCOME_TIMEOUT,
@@ -681,7 +681,7 @@ async def test_claude_text_input_reaches_input_area(tmp_path):
         scene_root=tmp_path / "scenes",
     )
     try:
-        async with asyncvnc.connect(host=handle.host, port=handle.port) as vnc:
+        async with asyncvnc.connect(host=handle.host, port=handle.port, password="vncvt") as vnc:
             await _wait_for_claude_welcome(vnc)
 
             # Claude Code may show a "trust this folder?" prompt on
@@ -753,7 +753,7 @@ async def test_claude_box_drawing_corners_present(tmp_path):
         scene_root=tmp_path / "scenes",
     )
     try:
-        async with asyncvnc.connect(host=handle.host, port=handle.port) as vnc:
+        async with asyncvnc.connect(host=handle.host, port=handle.port, password="vncvt") as vnc:
             await _wait_for_claude_welcome(vnc)
 
             scene_dir = await trigger_server_dump(
@@ -807,7 +807,7 @@ async def test_claude_shutdown_notice_on_exit(tmp_path):
         scene_root=tmp_path / "scenes",
     )
     try:
-        async with asyncvnc.connect(host=handle.host, port=handle.port) as vnc:
+        async with asyncvnc.connect(host=handle.host, port=handle.port, password="vncvt") as vnc:
             await _wait_for_claude_welcome(vnc)
 
             # Send Ctrl+C twice via raw key events — AsyncVNC's .press

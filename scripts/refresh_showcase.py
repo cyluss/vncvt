@@ -93,7 +93,7 @@ async def capture_entry(entry: dict, defaults: dict) -> Path:
         )
         try:
             async with asyncvnc.connect(
-                host=handle.host, port=handle.port,
+                host=handle.host, port=handle.port, password="vncvt",
             ) as vnc:
                 await asyncio.sleep(wait_trust)
                 vnc.keyboard.press("Return")

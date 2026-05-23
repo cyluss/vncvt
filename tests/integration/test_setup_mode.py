@@ -60,14 +60,18 @@ async def test_setup_apply_changes_fps(vncvt_server_factory):
     # Use raw RFB connection so we control exactly what we read
     reader, writer = await asyncio.open_connection(host, port)
 
-    # Handshake
+    # Handshake with VNC auth (default password "vncvt")
+    from vncvt.server import _vnc_encrypt
     await reader.readexactly(12)  # server version
     writer.write(b"RFB 003.008\n")
     await writer.drain()
     sec_types = await reader.readexactly(1)
     n = sec_types[0]
     await reader.readexactly(n)
-    writer.write(bytes([1]))  # select None auth
+    writer.write(bytes([2]))  # select VNC auth
+    await writer.drain()
+    challenge = await reader.readexactly(16)
+    writer.write(_vnc_encrypt(challenge, "vncvt"))
     await writer.drain()
     await reader.readexactly(4)  # SecurityResult
     writer.write(bytes([1]))  # ClientInit shared=1

@@ -162,10 +162,9 @@ def main() -> None:
              "falling back to /bin/bash)",
     )
     parser.add_argument(
-        "--password", default=cfg("password", None),
-        help="Enable VNC Authentication (type 2) with this password. "
-             "Required for macOS Screen Sharing.app. If omitted, only "
-             "None auth (type 1) is offered.",
+        "--password", default=cfg("password", "vncvt"),
+        help="VNC Authentication password (default: 'vncvt'). "
+             "Required for macOS Screen Sharing.app.",
     )
     parser.add_argument(
         "--log-traffic", action="store_true",

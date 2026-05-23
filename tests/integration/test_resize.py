@@ -17,20 +17,21 @@ from pathlib import Path
 import pytest
 
 
-def _handshake_no_auth(s: socket.socket) -> tuple[int, int]:
-    """Run the RFB handshake on a no-password server, return (w, h)
-    from ServerInit."""
+def _handshake_vnc_auth(s: socket.socket, password: str = "vncvt") -> tuple[int, int]:
+    """Run the RFB handshake with VNC auth, return (w, h) from ServerInit."""
+    from vncvt.server import _vnc_encrypt
+
     assert s.recv(12) == b"RFB 003.008\n"
     s.send(b"RFB 003.008\n")
     n_sec = s.recv(1)[0]
     sec_types = list(s.recv(n_sec))
-    assert 1 in sec_types, f"expected None auth, got {sec_types}"
-    s.send(bytes([1]))
-    # SecurityResult on 3.8
+    assert 2 in sec_types, f"expected VNC auth, got {sec_types}"
+    s.send(bytes([2]))
+    challenge = s.recv(16)
+    s.send(_vnc_encrypt(challenge, password))
     result = struct.unpack(">I", s.recv(4))[0]
-    assert result == 0
-    # ClientInit shared
-    s.send(bytes([1]))
+    assert result == 0, f"VNC auth failed: SecurityResult={result}"
+    s.send(bytes([1]))  # ClientInit shared
     server_init = s.recv(24)
     w, h = struct.unpack(">HH", server_init[0:4])
     name_len = struct.unpack(">I", server_init[20:24])[0]
@@ -76,7 +77,7 @@ def test_client_initiated_resize(vncvt_server):
     host, port = vncvt_server
     s = socket.create_connection((host, port), timeout=5.0)
     try:
-        w0, h0 = _handshake_no_auth(s)
+        w0, h0 = _handshake_vnc_auth(s)
         assert w0 > 0 and h0 > 0
 
         # Advertise both -223 and -308 so the resize notification path
@@ -157,7 +158,7 @@ def test_control_socket_resize(vncvt_server):
     # Fresh connection: ServerInit dimensions reflect the new size.
     s = socket.create_connection((handle.host, handle.port), timeout=5.0)
     try:
-        w_new, h_new = _handshake_no_auth(s)
+        w_new, h_new = _handshake_vnc_auth(s)
     finally:
         s.close()
 
@@ -190,7 +191,7 @@ def test_legacy_desktop_size_notification(vncvt_server):
     handle = vncvt_server
     s = socket.create_connection((handle.host, handle.port), timeout=5.0)
     try:
-        _handshake_no_auth(s)
+        _handshake_vnc_auth(s)
         # Advertise Raw + only the legacy DesktopSize encoding. No -308.
         _send_set_encodings(s, [0, -223])
 

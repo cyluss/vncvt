@@ -72,12 +72,15 @@ def test_bgrx_pixel_format_round_trip(vncvt_server):
     host, port = vncvt_server
     s = socket.create_connection((host, port), timeout=5.0)
     try:
-        # RFB handshake.
+        # RFB handshake with VNC auth (default password "vncvt").
+        from vncvt.server import _vnc_encrypt
         assert _recv_exact(s, 12) == b"RFB 003.008\n"
         s.send(b"RFB 003.008\n")
         n_sec = _recv_exact(s, 1)[0]
         _recv_exact(s, n_sec)
-        s.send(bytes([1]))  # None auth
+        s.send(bytes([2]))  # VNC auth
+        challenge = _recv_exact(s, 16)
+        s.send(_vnc_encrypt(challenge, "vncvt"))
         assert struct.unpack(">I", _recv_exact(s, 4))[0] == 0
         s.send(bytes([1]))  # ClientInit shared
         server_init = _recv_exact(s, 24)

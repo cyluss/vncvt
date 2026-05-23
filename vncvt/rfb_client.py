@@ -241,7 +241,7 @@ class RFBClient:
         # RFB 3.3: server picks the security type and sends a single
         # uint32 — the client has no choice. RFB 3.7+: server sends a
         # count-prefixed list and reads back the client's one-byte pick.
-        offered = SEC_VNC if self.server.password else SEC_NONE
+        offered = SEC_VNC
         if minor == 3:
             self.writer.write(struct.pack(">I", offered))
             await self.writer.drain()
