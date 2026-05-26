@@ -71,6 +71,10 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgles2
 
+      - name: Dismiss Setup Assistant (macOS)
+        if: runner.os == 'macOS'
+        run: sudo killall "Setup Assistant" || true
+
       - name: Install dependencies (with scene-match deps)
         run: uv sync --all-groups
 
