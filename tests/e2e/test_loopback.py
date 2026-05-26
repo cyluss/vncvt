@@ -40,11 +40,12 @@ MAC_THRESHOLDS = dict(ssim_min=0.70, bhat_max=0.50, min_std=3.0)
 # ---------------------------------------------------------------------------
 
 
-def _run_vncdo(host: str, port: int, *ops: str) -> None:
+def _run_vncdo(host: str, port: int, *ops: str, password: str = "vncvt") -> None:
     """Run one vncdotool invocation with the given ops."""
     args = [
         "uv", "run", "--with", "vncdotool", "vncdo",
         "-s", f"{host}::{port}",
+        "-p", password,
         *ops,
     ]
     proc = subprocess.Popen(
