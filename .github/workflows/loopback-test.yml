@@ -85,6 +85,6 @@ jobs:
         with:
           name: scene-dumps-${{ matrix.os }}
           path: |
-            tests/scene-dumps/
+            tests/e2e/scene-dumps/
             /tmp/vncvt-ctl-*/
           if-no-files-found: ignore
